@@ -46,8 +46,23 @@ try {
   $packageFile = Join-Path $cliRoot 'package.json'
   if (-not (Test-Path -LiteralPath $packageFile)) { throw 'The NexaraCLI package was not found in the GitHub archive.' }
 
+  $globalRoot = (& $npm.Source root --global).Trim()
+  $globalPrefix = (& $npm.Source prefix --global).Trim()
+  if (-not $globalRoot -or -not $globalPrefix) { throw 'Could not determine npm global install paths.' }
+  $oldPackage = Join-Path $globalRoot 'nexara-cli'
+  if (Test-Path -LiteralPath $oldPackage) {
+    Remove-Item -LiteralPath $oldPackage -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  foreach ($shim in @('nexara', 'nexara.cmd', 'nexara.ps1')) {
+    $shimPath = Join-Path $globalPrefix $shim
+    if (Test-Path -LiteralPath $shimPath) {
+      Remove-Item -LiteralPath $shimPath -Force -ErrorAction SilentlyContinue
+    }
+  }
   & $npm.Source install --global $cliRoot --no-fund --no-audit --force *> $null
   if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
+  $entrypoint = Join-Path $globalRoot 'nexara-cli\bin\nexara.js'
+  if (-not (Test-Path -LiteralPath $entrypoint)) { throw "Installed CLI entrypoint is missing: $entrypoint" }
   Write-State @{
     status = 'updated'
     currentVersion = $TargetVersion

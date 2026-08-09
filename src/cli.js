@@ -33,6 +33,8 @@ const TEXT_EXTENSIONS = new Set([
 // consistent across every client.
 const MODEL_CONTEXT = new Map([
   ["openai/gpt-oss-120b", 131_072],
+  ["openai/gpt-5.6-luna", 500_000],
+  ["openai/gpt-5.6-terra", 500_000],
   ["minimax/minimax-m2", 204_800],
   ["minimax/minimax-m2.1-highspeed", 204_800],
   ["minimax/minimax-m2.1", 204_800],
@@ -98,6 +100,15 @@ const MODEL_CONTEXT = new Map([
   ["nvidia/nemotron-3-nano-omni", 128_000],
 ]);
 const LOCKED_MODELS = new Set(["xiaomi/mimo-v2.5-pro:free", "xiaomi/mimo-v2.5:free"]);
+const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+function normalizeReasoningEffort(value) {
+  const normalized = String(value ?? "").toLowerCase().replace(/\s+/g, "_");
+  return normalized === "extra_high" ? "xhigh" : normalized;
+}
+const MODEL_PRICING = new Map([
+  ["openai/gpt-5.6-luna", { input: 0.2, output: 1.05 }],
+  ["openai/gpt-5.6-terra", { input: 2.05, output: 11.75 }],
+]);
 const CJK_RE = /[\u3000-\u303F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/g;
 
 function estimateTokens(text) {
@@ -128,6 +139,8 @@ function contextOf(messages) {
 
 const MODELS = [
   ["openai/gpt-oss-120b", "GPT-OSS-120B"],
+  ["openai/gpt-5.6-luna", "GPT-5.6 Luna (Paid xKiro)"],
+  ["openai/gpt-5.6-terra", "GPT-5.6 Terra (Paid xKiro)"],
   ["minimax/minimax-m2", "MiniMax M2"],
   ["minimax/minimax-m2.1-highspeed", "MiniMax M2.1 High-Speed"],
   ["minimax/minimax-m2.1", "MiniMax M2.1"],
@@ -219,6 +232,10 @@ const MODEL_ALIASES = new Map([
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
   ["grok", "x-ai/grok-4.5"],
   ["grok-4.5", "x-ai/grok-4.5"],
+  ["luna", "openai/gpt-5.6-luna"],
+  ["gpt-5.6-luna", "openai/gpt-5.6-luna"],
+  ["terra", "openai/gpt-5.6-terra"],
+  ["gpt-5.6-terra", "openai/gpt-5.6-terra"],
   ["qwen", "qwen/qwen3.7-max"],
   ["qwen3.7", "qwen/qwen3.7-max"],
   ["qwen-coder", "qwen/qwen3-coder-plus"],
@@ -242,7 +259,7 @@ function diagnostic(text) {
 
 function printBanner(config) {
   console.log(color.cyan("\n  ✦ Nexara CLI") + color.dim("  —  AI in your terminal"));
-  console.log(color.dim(`  model: ${modelLabel(config.selectedModel)}   app: ${config.appUrl}`));
+  console.log(color.dim(`  model: ${modelLabel(config.selectedModel)}   effort: ${config.selectedReasoningEffort || "medium"}   app: ${config.appUrl}`));
   console.log(color.dim("  Type /help for commands. Ctrl+C twice exits.\n"));
 }
 
@@ -268,7 +285,9 @@ function printModels(selected) {
   for (const [id, label] of MODELS) {
     const locked = LOCKED_MODELS.has(id);
     const marker = id === selected ? color.green("●") : locked ? color.yellow("🔒") : "○";
-    console.log(`${marker} ${label} ${color.dim(`(${id})`)}${locked ? color.yellow(" — unavailable") : ""}`);
+    const pricing = MODEL_PRICING.get(id);
+    const priceLabel = pricing ? color.dim(` — $${pricing.input}/1M in · $${pricing.output}/1M out`) : "";
+    console.log(`${marker} ${label} ${color.dim(`(${id})`)}${priceLabel}${locked ? color.yellow(" — unavailable") : ""}`);
   }
   console.log();
 }
@@ -278,6 +297,7 @@ function printHelp() {
 ${color.cyan("Nexara CLI commands")}
   /help                         Show this help
   /model [name|id]              List or switch models
+  /effort [level]               Set GPT-5.6 reasoning effort (low/medium/high/xhigh=Extra High/max)
   /models                       List every available model
   /attach <path>                Attach an image, PDF, or text/code file
   /image <path>                 Alias for /attach (images, PDFs, text files)
@@ -301,7 +321,7 @@ ${color.dim("Voice: press M at the prompt to record your mic; press M again to")
 ${color.dim("stop and transcribe your words into the input (speech-to-text).")}
 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
-${color.dim("Outside the REPL, use: nexara \"prompt\", nexara -p \"prompt\", --image file.png, --model deepseek-v4-pro, --continue")}
+${color.dim("Outside the REPL, use: nexara \"prompt\", nexara -p \"prompt\", --image file.png, --model deepseek-v4-pro, --effort high, --continue")}
 `);
 }function parseArgs(argv) {
   const options = { prompt: [], images: [], print: false, continue: false, google: false, qr: false, help: false, version: false };
@@ -320,6 +340,10 @@ ${color.dim("Outside the REPL, use: nexara \"prompt\", nexara -p \"prompt\", --i
     else if (arg === "--qr") options.qr = true;
     else if (arg === "--model" || arg === "-m") {
       options.model = requiredValue(i, arg, "a model name or id");
+      i += 1;
+    } else if (arg === "--effort") {
+      options.reasoningEffort = normalizeReasoningEffort(requiredValue(i, arg, "low, medium, high, xhigh (Extra High), or max"));
+      if (!REASONING_EFFORTS.has(options.reasoningEffort)) throw new Error("--effort must be low, medium, high, xhigh (Extra High), or max.");
       i += 1;
     } else if (arg === "--image" || arg === "-i") {
       options.images.push(requiredValue(i, arg, "an image path"));
@@ -437,6 +461,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
     threadId: state.threadId,
     messages: [...state.messages, message],
     model: state.config.selectedModel,
+    reasoningEffort: state.config.selectedReasoningEffort,
     mode,
     goal,
     quiet,
@@ -495,6 +520,21 @@ async function handleSlash(state, line) {
       if (!model) { console.log(color.red(`Unknown model: ${argument}`)); printModels(state.config.selectedModel); return true; }
       state.config = saveConfig({ selectedModel: model });
       console.log(color.green(`Model switched to ${modelLabel(model)}.`));
+      return true;
+    }
+    case "/effort": {
+      if (!argument) {
+        console.log(`Reasoning effort: ${state.config.selectedReasoningEffort || "medium"}`);
+        console.log("Options: low, medium, high, xhigh (Extra High), max (used by GPT-5.6 Luna/Terra only).");
+        return true;
+      }
+      const value = normalizeReasoningEffort(argument);
+      if (!REASONING_EFFORTS.has(value)) {
+        console.log(color.red("Unknown effort. Choose low, medium, high, xhigh (Extra High), or max."));
+        return true;
+      }
+      state.config = saveConfig({ selectedReasoningEffort: value });
+      console.log(color.green(`GPT-5.6 reasoning effort set to ${value}.`));
       return true;
     }
     case "/image":
@@ -730,6 +770,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (!model) throw new Error(`Unknown model: ${options.model}. Run nexara --help.`);
     nextConfig.selectedModel = model;
   }
+  if (options.reasoningEffort) nextConfig.selectedReasoningEffort = options.reasoningEffort;
   const auth = createAuth(nextConfig);
   const command = options.prompt[0];
   if (command === "login" && options.prompt.length === 1) { await login(nextConfig, auth, options.google, options.qr); return; }

@@ -151,6 +151,7 @@ export async function sendChat({
   threadId,
   messages,
   model,
+  reasoningEffort,
   mode,
   goal,
   onStatus,
@@ -159,7 +160,12 @@ export async function sendChat({
 }) {
   const token = await auth.accessToken();
   if (!token) throw new Error("Your Nexara session expired. Run `nexara login` again.");
-  const body = { messages, threadId, model };
+  const body = {
+    messages,
+    threadId,
+    model,
+    ...(typeof reasoningEffort === "string" ? { reasoningEffort } : {}),
+  };
   if (mode) body.mode = mode;
   if (goal) body.goal = goal;
   const response = await fetch(`${appUrl.replace(/\/+$/, "")}/api/chat`, {

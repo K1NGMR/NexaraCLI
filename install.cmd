@@ -14,8 +14,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralP
 if errorlevel 1 goto :fail
 for /d %%D in ("%TEMP_DIR%\NexaraCLI-*") do set "ROOT=%%D"
 if not exist "%ROOT%\package.json" goto :fail
+for /f "delims=" %%R in ('npm root --global') do set "GLOBAL_ROOT=%%R"
+for /f "delims=" %%P in ('npm prefix --global') do set "GLOBAL_PREFIX=%%P"
+if not exist "%GLOBAL_ROOT%" goto :fail
+rmdir /s /q "%GLOBAL_ROOT%\nexara-cli" >nul 2>nul
+del /q "%GLOBAL_PREFIX%\nexara" "%GLOBAL_PREFIX%\nexara.cmd" "%GLOBAL_PREFIX%\nexara.ps1" >nul 2>nul
 npm install --global "%ROOT%" --no-fund --no-audit --force
 if errorlevel 1 goto :fail
+if not exist "%GLOBAL_ROOT%\nexara-cli\bin\nexara.js" goto :fail
 echo Installed. Run: nexara
 echo Automatic updates are enabled.
 goto :cleanup
