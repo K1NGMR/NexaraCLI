@@ -33,8 +33,8 @@ const TEXT_EXTENSIONS = new Set([
 // consistent across every client.
 const MODEL_CONTEXT = new Map([
   ["openai/gpt-oss-120b", 131_072],
-  ["openai/gpt-5.6-luna", 500_000],
-  ["openai/gpt-5.6-terra", 500_000],
+  ["openai/gpt-5.6-luna", 1_000_000],
+  ["openai/gpt-5.6-terra", 1_000_000],
   ["minimax/minimax-m2", 204_800],
   ["minimax/minimax-m2.1-highspeed", 204_800],
   ["minimax/minimax-m2.1", 204_800],
@@ -101,6 +101,8 @@ const MODEL_CONTEXT = new Map([
 ]);
 const LOCKED_MODELS = new Set(["xiaomi/mimo-v2.5-pro:free", "xiaomi/mimo-v2.5:free"]);
 const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const REASONING_EFFORT_OUTPUT_ESTIMATES = { low: 1024, medium: 2048, high: 4096, xhigh: 8192, max: 16384 };
+const REASONING_EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max" };
 function normalizeReasoningEffort(value) {
   const normalized = String(value ?? "").toLowerCase().replace(/\s+/g, "_");
   return normalized === "extra_high" ? "xhigh" : normalized;
@@ -109,6 +111,27 @@ const MODEL_PRICING = new Map([
   ["openai/gpt-5.6-luna", { input: 0.2, output: 1.05 }],
   ["openai/gpt-5.6-terra", { input: 2.05, output: 11.75 }],
 ]);
+
+function formatCreditEstimate(cost) {
+  return cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(2)}`;
+}
+
+function reasoningEffortCreditEstimate(model, effort, inputTokens) {
+  const pricing = MODEL_PRICING.get(model);
+  if (!pricing) return 0;
+  return (inputTokens * pricing.input + REASONING_EFFORT_OUTPUT_ESTIMATES[effort] * pricing.output) / 1_000_000;
+}
+
+function printEffortEstimates(model, inputTokens) {
+  const pricing = MODEL_PRICING.get(model);
+  if (!pricing) return;
+  const estimates = [...REASONING_EFFORTS]
+    .map((effort) => `${REASONING_EFFORT_LABELS[effort]} ~${formatCreditEstimate(reasoningEffortCreditEstimate(model, effort, inputTokens))}`)
+    .join(" · ");
+  console.log(color.dim(`Estimated $ Credits before sending (${formatTokens(inputTokens)} input tokens): ${estimates}`));
+  console.log(color.dim("Estimate uses an illustrative response budget; actual billing uses real provider usage."));
+}
+
 const CJK_RE = /[\u3000-\u303F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/g;
 
 function estimateTokens(text) {
@@ -454,7 +477,13 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
   await ensureThread(state);
   const message = userMessage(trimmed, files);
   const quiet = Boolean(state.quiet);
-  if (!quiet) process.stdout.write(color.magenta("nexara ") + color.dim("· "));
+  if (!quiet) {
+    printEffortEstimates(
+      state.config.selectedModel,
+      contextOf([...state.messages, message]) + 1_600,
+    );
+    process.stdout.write(color.magenta("nexara ") + color.dim("· "));
+  }
   const assistant = await sendChat({
     auth: state.auth,
     appUrl: state.config.appUrl,
@@ -526,6 +555,7 @@ async function handleSlash(state, line) {
       if (!argument) {
         console.log(`Reasoning effort: ${state.config.selectedReasoningEffort || "medium"}`);
         console.log("Options: low, medium, high, xhigh (Extra High), max (used by GPT-5.6 Luna/Terra only).");
+        printEffortEstimates(state.config.selectedModel, contextOf(state.messages) + 1_600);
         return true;
       }
       const value = normalizeReasoningEffort(argument);
@@ -535,6 +565,7 @@ async function handleSlash(state, line) {
       }
       state.config = saveConfig({ selectedReasoningEffort: value });
       console.log(color.green(`GPT-5.6 reasoning effort set to ${value}.`));
+      printEffortEstimates(state.config.selectedModel, contextOf(state.messages) + 1_600);
       return true;
     }
     case "/image":
