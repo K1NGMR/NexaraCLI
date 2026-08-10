@@ -107,7 +107,7 @@ const MODEL_CONTEXT = new Map([
   ["nvidia/llama-3.3-nemotron-super-49b", 128_000],
   ["nvidia/nemotron-3-nano-omni", 128_000],
 ]);
-const LOCKED_MODELS = new Set(["xiaomi/mimo-v2.5-pro:free", "xiaomi/mimo-v2.5:free"]);
+const LOCKED_MODELS = new Set();
 const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const REASONING_EFFORT_OUTPUT_ESTIMATES = { low: 1024, medium: 2048, high: 4096, xhigh: 8192, max: 16384 };
 const REASONING_EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max" };
@@ -118,6 +118,10 @@ function normalizeReasoningEffort(value) {
 const MODEL_PRICING = new Map([
   ["openai/gpt-5.6-luna", { input: 0.2, output: 1.05 }],
   ["openai/gpt-5.6-terra", { input: 2.05, output: 11.75 }],
+  ["minimax/minimax-m3", { input: 0.3, output: 1.2 }],
+  ["deepseek/deepseek-v4-flash-0731", { input: 0.08, output: 0.14 }],
+  ["xiaomi/mimo-v2.5-pro:free", { input: 0.43, output: 0.87 }],
+  ["xiaomi/mimo-v2.5:free", { input: 0.43, output: 0.87 }],
   ["moonshotai/kimi-k2.6", { input: 0.95, output: 4 }],
   ["moonshotai/kimi-k2.5", { input: 0.57, output: 2.85 }],
   ["google/gemini-3.6-flash", { input: 1.5, output: 7.5 }],
@@ -203,7 +207,7 @@ const MODELS = [
   ["minimax/minimax-m2.5", "MiniMax M2.5"],
   ["minimax/minimax-m2.7-highspeed", "MiniMax M2.7 High-Speed"],
   ["minimax/minimax-m2.7", "MiniMax M2.7"],
-  ["minimax/minimax-m3", "MiniMax M3 ($ Credits)"],
+  ["minimax/minimax-m3", "MiniMax M3 (Paid xKiro · $ Credits)"],
   ["mistralai/ministral-3b", "Ministral 3B"],
   ["mistralai/ministral-8b", "Ministral 8B"],
   ["mistralai/ministral-14b", "Ministral 14B"],
@@ -221,9 +225,9 @@ const MODELS = [
   ["meta/llama-3.2-1b-instruct", "Llama 3.2 1B Instruct"],
   ["meta/llama-3.2-3b-instruct", "Llama 3.2 3B Instruct"],
   ["meta/llama-3.1-8b-instruct", "Llama 3.1 8B Instruct"],
-  ["deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 07.31 ($ Credits)"],
-  ["xiaomi/mimo-v2.5-pro:free", "Xiaomi Mimo V2.5 Pro (Locked)"],
-  ["xiaomi/mimo-v2.5:free", "Xiaomi Mimo V2.5 (Locked)"],
+  ["deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 07.31 (Paid xKiro · $ Credits)"],
+  ["xiaomi/mimo-v2.5-pro:free", "Xiaomi Mimo V2.5 Pro (Paid xKiro · $ Credits)"],
+  ["xiaomi/mimo-v2.5:free", "Xiaomi Mimo V2.5 (Paid xKiro · $ Credits)"],
   ["x-ai/grok-4.5", "Grok 4.5 (Paid xKiro)"],
   ["nvidia/nemotron-3-nano", "Nemotron 3 Nano"],
   ["nvidia/nemotron-3-super", "Nemotron 3 Super"],
@@ -268,6 +272,9 @@ const MODEL_ALIASES = new Map([
   ["minimax-m2.5", "minimax/minimax-m2.5"],
   ["m2.7", "minimax/minimax-m2.7-highspeed"],
   ["m3", "minimax/minimax-m3"],
+  ["mimo", "xiaomi/mimo-v2.5-pro:free"],
+  ["mimo-pro", "xiaomi/mimo-v2.5-pro:free"],
+  ["mimo-v2.5", "xiaomi/mimo-v2.5:free"],
   ["ministral", "mistralai/ministral-8b"],
   ["ministral-3b", "mistralai/ministral-3b"],
   ["ministral-14b", "mistralai/ministral-14b"],
