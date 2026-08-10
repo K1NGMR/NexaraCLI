@@ -35,6 +35,14 @@ const MODEL_CONTEXT = new Map([
   ["openai/gpt-oss-120b", 131_072],
   ["openai/gpt-5.6-luna", 1_000_000],
   ["openai/gpt-5.6-terra", 1_000_000],
+  ["moonshotai/kimi-k2.6", 262_144],
+  ["moonshotai/kimi-k2.5", 262_144],
+  ["google/gemini-3.6-flash", 1_000_000],
+  ["google/gemini-3.5-flash", 1_000_000],
+  ["google/gemini-3.1-pro", 1_000_000],
+  ["google/gemini-3-flash", 1_000_000],
+  ["google/gemini-2.5-flash", 1_000_000],
+  ["google/gemini-2.5-pro", 1_000_000],
   ["minimax/minimax-m2", 204_800],
   ["minimax/minimax-m2.1-highspeed", 204_800],
   ["minimax/minimax-m2.1", 204_800],
@@ -110,6 +118,22 @@ function normalizeReasoningEffort(value) {
 const MODEL_PRICING = new Map([
   ["openai/gpt-5.6-luna", { input: 0.2, output: 1.05 }],
   ["openai/gpt-5.6-terra", { input: 2.05, output: 11.75 }],
+  ["moonshotai/kimi-k2.6", { input: 0.95, output: 4 }],
+  ["moonshotai/kimi-k2.5", { input: 0.57, output: 2.85 }],
+  ["google/gemini-3.6-flash", { input: 1.5, output: 7.5 }],
+  ["google/gemini-3.5-flash", { input: 1.5, output: 9 }],
+  ["google/gemini-3.1-pro", { input: 2, output: 12 }],
+  ["google/gemini-3-flash", { input: 0.5, output: 3 }],
+  ["google/gemini-2.5-flash", { input: 0.3, output: 2.5 }],
+  ["google/gemini-2.5-pro", { input: 1.25, output: 10 }],
+]);
+const MODEL_IMAGE_INPUT = new Set([
+  "google/gemini-3.6-flash",
+  "google/gemini-3.5-flash",
+  "google/gemini-3.1-pro",
+  "google/gemini-3-flash",
+  "google/gemini-2.5-flash",
+  "google/gemini-2.5-pro",
 ]);
 
 function formatCreditEstimate(cost) {
@@ -164,6 +188,14 @@ const MODELS = [
   ["openai/gpt-oss-120b", "GPT-OSS-120B"],
   ["openai/gpt-5.6-luna", "GPT-5.6 Luna (Paid xKiro)"],
   ["openai/gpt-5.6-terra", "GPT-5.6 Terra (Paid xKiro)"],
+  ["moonshotai/kimi-k2.6", "Kimi K2.6 (Paid xKiro)"],
+  ["moonshotai/kimi-k2.5", "Kimi K2.5 (Paid xKiro)"],
+  ["google/gemini-3.6-flash", "Gemini 3.6 Flash (Paid xKiro · Vision)"],
+  ["google/gemini-3.5-flash", "Gemini 3.5 Flash (Paid xKiro · Vision)"],
+  ["google/gemini-3.1-pro", "Gemini 3.1 Pro (Paid xKiro · Vision)"],
+  ["google/gemini-3-flash", "Gemini 3 Flash (Paid xKiro · Vision)"],
+  ["google/gemini-2.5-flash", "Gemini 2.5 Flash (Paid xKiro · Vision)"],
+  ["google/gemini-2.5-pro", "Gemini 2.5 Pro (Paid xKiro · Vision)"],
   ["minimax/minimax-m2", "MiniMax M2"],
   ["minimax/minimax-m2.1-highspeed", "MiniMax M2.1 High-Speed"],
   ["minimax/minimax-m2.1", "MiniMax M2.1"],
@@ -259,6 +291,16 @@ const MODEL_ALIASES = new Map([
   ["gpt-5.6-luna", "openai/gpt-5.6-luna"],
   ["terra", "openai/gpt-5.6-terra"],
   ["gpt-5.6-terra", "openai/gpt-5.6-terra"],
+  ["kimi", "moonshotai/kimi-k2.6"],
+  ["kimi-k2.6", "moonshotai/kimi-k2.6"],
+  ["kimi-k2.5", "moonshotai/kimi-k2.5"],
+  ["gemini", "google/gemini-3.6-flash"],
+  ["gemini-3.6-flash", "google/gemini-3.6-flash"],
+  ["gemini-3.5-flash", "google/gemini-3.5-flash"],
+  ["gemini-3.1-pro", "google/gemini-3.1-pro"],
+  ["gemini-3-flash", "google/gemini-3-flash"],
+  ["gemini-2.5-flash", "google/gemini-2.5-flash"],
+  ["gemini-2.5-pro", "google/gemini-2.5-pro"],
   ["qwen", "qwen/qwen3.7-max"],
   ["qwen3.7", "qwen/qwen3.7-max"],
   ["qwen-coder", "qwen/qwen3-coder-plus"],
@@ -310,7 +352,8 @@ function printModels(selected) {
     const marker = id === selected ? color.green("●") : locked ? color.yellow("🔒") : "○";
     const pricing = MODEL_PRICING.get(id);
     const priceLabel = pricing ? color.dim(` — $${pricing.input}/1M in · $${pricing.output}/1M out`) : "";
-    console.log(`${marker} ${label} ${color.dim(`(${id})`)}${priceLabel}${locked ? color.yellow(" — unavailable") : ""}`);
+    const imageLabel = MODEL_IMAGE_INPUT.has(id) ? color.cyan(" · Vision input") : "";
+    console.log(`${marker} ${label} ${color.dim(`(${id})`)}${priceLabel}${imageLabel}${locked ? color.yellow(" — unavailable") : ""}`);
   }
   console.log();
 }
