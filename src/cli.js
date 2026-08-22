@@ -182,10 +182,30 @@ function contextOf(messages) {
   for (const message of messages) {
     for (const part of message.parts || []) {
       if (part.type === "text" && part.text) used += estimateTokens(part.text);
-      if (part.type === "file") used += 8;
+      // Attachments: estimate from the data URL payload (~4 chars/token) so
+      // a large file/image no longer hides behind a flat "+8".
+      if (part.type === "file" && typeof part.url === "string") {
+        const comma = part.url.indexOf(",");
+        const payload = comma >= 0 ? part.url.length - comma - 1 : 0;
+        used += Math.max(8, Math.ceil(payload / 4));
+      } else if (part.type === "file") {
+        used += 8;
+      }
     }
   }
   return used;
+}
+
+/**
+ * Exact context after the last completed turn, when the stream reported the
+ * provider's real usage. inputTokens is precisely what the model received
+ * (system + tools + history); its reply adds outputTokens going forward.
+ * Falls back to null when this session has no real numbers yet.
+ */
+function lastRealContext(state) {
+  const usage = state.lastUsage;
+  if (!usage) return null;
+  return (Number(usage.inputTokens) || 0) + (Number(usage.outputTokens) || 0);
 }
 
 const MODELS = [
@@ -436,7 +456,10 @@ async function readImage(filePath) {
 
 /** Reads an image, PDF, or text/code file into a sendable attachment. */
 async function readAttachment(filePath) {
-  const resolved = path.resolve(filePath);
+  // Strip surrounding quotes so /attach "C:\my file.png" works — the slash
+  // handler splits on whitespace and keeps the quote characters verbatim.
+  const unquoted = filePath.replace(/^"(.*)"$/s, "$1").replace(/^'(.*)'$/s, "$1");
+  const resolved = path.resolve(unquoted);
   const extension = path.extname(resolved).toLowerCase();
   let mediaType = IMAGE_TYPES.get(extension);
   if (extension === ".pdf") mediaType = "application/pdf";
@@ -566,8 +589,11 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
     state.messages.push(message, assistant);
   }
   state.pendingImages = [];
+  if (assistant.usage) state.lastUsage = assistant.usage;
   if (!quiet) {
-    const ctxUsed = contextOf(state.messages);
+    // Real provider usage wins — it is exactly what the model received last
+    // turn. The char heuristic only fills in before the first real number.
+    const ctxUsed = lastRealContext(state) ?? contextOf(state.messages);
     const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
     const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
     process.stdout.write(color.dim(`\n[ctx ${formatTokens(ctxUsed)} / ${formatTokens(ctxWindow)} (${percent}%) — /compact frees this]\n`));
@@ -692,10 +718,12 @@ async function handleSlash(state, line) {
     case "/config": console.log(`Config: ${state.configPath}`); return true;
     case "/status": {
       const user = await state.auth.user();
-      const ctxUsed = contextOf(state.messages);
+      // Real usage from the last turn when available; heuristic otherwise.
+      const real = lastRealContext(state);
+      const ctxUsed = real ?? contextOf(state.messages);
       const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
       console.log(
-        `Signed in: ${user?.email || "no"}\nModel: ${modelLabel(state.config.selectedModel)}\nThread: ${state.threadId || "none"}\nPending files: ${state.pendingImages.length}\nContext: ${formatTokens(ctxUsed)} / ${formatTokens(ctxWindow)} (${Math.min(100, Math.round((ctxUsed / ctxWindow) * 100))}%)`,
+        `Signed in: ${user?.email || "no"}\nModel: ${modelLabel(state.config.selectedModel)}\nThread: ${state.threadId || "none"}\nPending files: ${state.pendingImages.length}\nContext: ${formatTokens(ctxUsed)} / ${formatTokens(ctxWindow)} (${Math.min(100, Math.round((ctxUsed / ctxWindow) * 100))}%)${real ? " [exact]" : " [estimate]"}`,
       );
       return true;
     }
@@ -704,7 +732,13 @@ async function handleSlash(state, line) {
     case "/perplexity": await runPrompt(state, argument, { mode: "perplexity", files: state.pendingImages }); return true;
     case "/plan": await runPrompt(state, argument, { mode: "planner", files: state.pendingImages }); return true;
     case "/honest": await runPrompt(state, argument, { mode: "honest", files: state.pendingImages }); return true;
-    case "/goal": await continueGoal(state, argument); return true;
+    case "/goal":
+      if (!argument) {
+        console.log("Usage: /goal <what to achieve> — the agent loops until it reports GOAL_ACHIEVED.");
+        return true;
+      }
+      await continueGoal(state, argument);
+      return true;
     case "/quit":
     case "/exit": return false;
     default: console.log(color.yellow(`Unknown command: ${command}. Type /help.`)); return true;

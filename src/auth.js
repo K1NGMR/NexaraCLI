@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import http from "node:http";
+import net from "node:net";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -124,6 +125,21 @@ export function createAuth(config = loadConfig()) {
     let redirectUrl;
     let resolveCallback;
     let rejectCallback;
+    // Supabase requires EXACT redirect URLs, so the callback port must be
+    // fixed (the documented allowlist entry is http://127.0.0.1:54321).
+    // Fall back once, then to an ephemeral port rather than never working.
+    let listenPort = 0;
+    for (const candidate of [54321, 54322]) {
+      const free = await new Promise((resolve) => {
+        const probe = net.createServer();
+        probe.once("error", () => resolve(false));
+        probe.listen(candidate, "127.0.0.1", () => probe.close(() => resolve(true)));
+      });
+      if (free) {
+        listenPort = candidate;
+        break;
+      }
+    }
     const callbackDone = new Promise((resolve, reject) => {
       resolveCallback = resolve;
       rejectCallback = reject;
@@ -158,7 +174,7 @@ export function createAuth(config = loadConfig()) {
         rejectCallback?.(error);
         reject(error);
       });
-      server.listen(0, "127.0.0.1", () => {
+      server.listen(listenPort, "127.0.0.1", () => {
         const address = server.address();
         if (!address || typeof address === "string") {
           closeServer?.();
@@ -177,8 +193,11 @@ export function createAuth(config = loadConfig()) {
         options: { redirectTo: redirectUrl, skipBrowserRedirect: true },
       });
       if (error || !data.url) throw new Error(error?.message || "Could not start Google sign-in.");
-      const opener = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";
-      const args = process.platform === "win32" ? ["/c", "start", "", data.url] : [data.url];
+      // Windows: never route the URL through cmd.exe — bare "&" in the
+      // authorize URL would split it into separate commands. rundll32
+      // receives the URL as a single argv entry with no shell parsing.
+      const opener = process.platform === "win32" ? "rundll32" : process.platform === "darwin" ? "open" : "xdg-open";
+      const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", data.url] : [data.url];
       await execFileAsync(opener, args);
     } catch (error) {
       closeServer?.();

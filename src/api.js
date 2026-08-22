@@ -142,6 +142,13 @@ function consumeDataLine(raw, state, onStatus, onText) {
     onStatus?.("using a tool");
   } else if (event.type === "error" || event.type === "finish-error") {
     throw new Error(event.errorText || event.error || "The Nexara stream failed.");
+  } else if (event.metadata?.usage && event.type) {
+    // The finish chunk carries the provider's REAL token counts (the same
+    // numbers billing uses). Stash them so /status shows exact context.
+    const usage = event.metadata.usage;
+    const input = Number(usage.inputTokens) || 0;
+    const output = Number(usage.outputTokens) || 0;
+    if (input + output > 0) state.lastUsage = { inputTokens: input, outputTokens: output };
   }
 }
 
@@ -214,6 +221,8 @@ export async function sendChat({
     text: state.text,
     compacted,
     summary,
+    // Real provider usage for this turn (null when the stream carried none).
+    usage: state.lastUsage ?? null,
   };
 }
 
