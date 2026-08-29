@@ -107,6 +107,7 @@ const MODEL_CONTEXT = new Map([
   ["z-ai/glm-5-turbo", 202_752],
   ["z-ai/glm-5.1", 200_000],
   ["z-ai/glm-5.2", 1_000_000],
+  ["z-ai/glm-5.2:free", 256_000],
   ["deepseek/deepseek-v3.2", 128_000],
   ["deepseek/deepseek-chat-v3.1", 128_000],
   ["deepseek/deepseek-v4-flash", 1_000_000],
@@ -137,6 +138,7 @@ const MODEL_PRICING = new Map([
   ["google/gemini-3-flash", { input: 0.5, output: 3 }],
   ["google/gemini-2.5-flash", { input: 0.3, output: 2.5 }],
   ["google/gemini-2.5-pro", { input: 1.25, output: 10 }],
+  ["z-ai/glm-5.2:free", { input: 0.45, output: 1.3 }],
 ]);
 const MODEL_IMAGE_INPUT = new Set([
   "google/gemini-3.6-flash",
