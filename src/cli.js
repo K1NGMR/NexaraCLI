@@ -33,6 +33,7 @@ const TEXT_EXTENSIONS = new Set([
 // consistent across every client.
 const MODEL_CONTEXT = new Map([
   ["openai/gpt-oss-120b", 131_072],
+  ["openai/gpt-5.3-codex-spark", 400_000],
   ["openai/gpt-5.6-luna", 1_000_000],
   ["openai/gpt-5.6-terra", 1_000_000],
   ["moonshotai/kimi-k2.6", 262_144],
