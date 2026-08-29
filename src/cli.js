@@ -37,8 +37,8 @@ const MODEL_CONTEXT = new Map([
   // AD_FUNDED_MODEL_IDS). Provider-documented params: max_tokens, temperature,
   // top_p, stop, frequency_penalty, presence_penalty, seed, stream, tools,
   // tool_choice, response_format, structured_outputs, reasoning,
-  // include_reasoning.
-  ["openai/gpt-5.3-codex-spark", 400_000],
+  // include_reasoning. Context/max-output per xKiro's catalog (128k, 65,536).
+  ["openai/gpt-5.3-codex-spark", 128_000],
   ["openai/gpt-5.6-luna", 1_000_000],
   ["openai/gpt-5.6-terra", 1_000_000],
   ["moonshotai/kimi-k2.6", 262_144],
