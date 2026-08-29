@@ -33,6 +33,11 @@ const TEXT_EXTENSIONS = new Set([
 // consistent across every client.
 const MODEL_CONTEXT = new Map([
   ["openai/gpt-oss-120b", 131_072],
+  // GPT-5.3 Codex Spark — free + unlimited, ad-funded (web adsterra-config.ts
+  // AD_FUNDED_MODEL_IDS). Provider-documented params: max_tokens, temperature,
+  // top_p, stop, frequency_penalty, presence_penalty, seed, stream, tools,
+  // tool_choice, response_format, structured_outputs, reasoning,
+  // include_reasoning.
   ["openai/gpt-5.3-codex-spark", 400_000],
   ["openai/gpt-5.6-luna", 1_000_000],
   ["openai/gpt-5.6-terra", 1_000_000],
