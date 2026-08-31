@@ -110,7 +110,6 @@ const MODEL_CONTEXT = new Map([
   ["deepseek/deepseek-v3.2", 128_000],
   ["deepseek/deepseek-chat-v3.1", 128_000],
   ["deepseek/deepseek-v4-flash", 1_000_000],
-  ["deepseek/deepseek-v4-pro", 1_000_000],
   ["nvidia/llama-3.3-nemotron-super-49b", 128_000],
   ["nvidia/nemotron-3-nano-omni", 128_000],
 ]);
@@ -288,7 +287,6 @@ const MODELS = [
   ["deepseek/deepseek-v3.2", "DeepSeek V3.2"],
   ["deepseek/deepseek-chat-v3.1", "DeepSeek Chat V3.1"],
   ["deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"],
-  ["deepseek/deepseek-v4-pro", "DeepSeek V4 Pro"],
   ["nvidia/llama-3.3-nemotron-super-49b", "Llama 3.3 Nemotron Super 49B"],
   ["nvidia/nemotron-3-nano-omni", "Nemotron 3 Nano Omni"],
 ];
@@ -319,7 +317,6 @@ const MODEL_ALIASES = new Map([
   ["deepseek", "deepseek/deepseek-v4-flash"],
   ["deepseek-v3", "deepseek/deepseek-v3.2"],
   ["deepseek-v4-flash", "deepseek/deepseek-v4-flash"],
-  ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
   ["grok", "x-ai/grok-4.5"],
   ["grok-4.5", "x-ai/grok-4.5"],
   ["luna", "openai/gpt-5.6-luna"],
@@ -422,7 +419,7 @@ ${color.dim("Voice: press M at the prompt to record your mic; press M again to")
 ${color.dim("stop and transcribe your words into the input (speech-to-text).")}
 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
-${color.dim("Outside the REPL, use: nexara \"prompt\", nexara -p \"prompt\", --image file.png, --model deepseek-v4-pro, --effort high, --continue")}
+${color.dim("Outside the REPL, use: nexara \"prompt\", nexara -p \"prompt\", --image file.png, --model deepseek-v4-flash, --effort high, --continue")}
 `);
 }function parseArgs(argv) {
   const options = { prompt: [], images: [], print: false, continue: false, google: false, qr: false, help: false, version: false };

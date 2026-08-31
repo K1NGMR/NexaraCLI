@@ -75,7 +75,7 @@ nexara -p "Summarize this"     # print/non-interactive mode
 cat build.log | nexara -p "Find the root cause"
 nexara --continue              # open the last saved Nexara thread
 nexara --continue "Continue the task" # send a one-shot continuation
-nexara --model "DeepSeek V4 Pro" "Review this design"
+nexara --model "DeepSeek V4 Flash" "Review this design"
 nexara --image screenshot.png "What is wrong here?"
 ```
 
