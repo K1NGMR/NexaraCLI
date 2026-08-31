@@ -109,6 +109,8 @@ const MODEL_CONTEXT = new Map([
   ["z-ai/glm-5.2", 1_000_000],
   ["z-ai/glm-5.3", 1_000_000],
   ["z-ai/glm-5.3-flash", 1_000_000],
+  ["sensenova/sensenova-6.7-flash-lite", 262_144],
+  ["sensenova/sensenova-6.8-flash-lite", 262_144],
   ["deepseek/deepseek-v3.2", 131_072],
   ["deepseek/deepseek-chat-v3.1", 163_840],
   ["deepseek/deepseek-v4-flash", 1_000_000],
@@ -289,6 +291,8 @@ const MODELS = [
   ["z-ai/glm-5.2", "GLM 5.2 ($ Credits)"],
   ["z-ai/glm-5.3", "GLM 5.3 ($ Credits)"],
   ["z-ai/glm-5.3-flash", "GLM 5.3 Flash ($ Credits)"],
+  ["sensenova/sensenova-6.7-flash-lite", "SenseNova 6.7 Flash-Lite"],
+  ["sensenova/sensenova-6.8-flash-lite", "SenseNova 6.8 Flash-Lite"],
   ["deepseek/deepseek-v3.2", "DeepSeek V3.2"],
   ["deepseek/deepseek-chat-v3.1", "DeepSeek Chat V3.1"],
   ["deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"],
@@ -348,6 +352,9 @@ const MODEL_ALIASES = new Map([
   ["glm-5.2", "z-ai/glm-5.2"],
   ["glm-5.3", "z-ai/glm-5.3"],
   ["glm-5.3-flash", "z-ai/glm-5.3-flash"],
+  ["sensenova", "sensenova/sensenova-6.8-flash-lite"],
+  ["sensenova-6.7", "sensenova/sensenova-6.7-flash-lite"],
+  ["sensenova-6.8", "sensenova/sensenova-6.8-flash-lite"],
 ]);
 
 const color = {
