@@ -107,6 +107,8 @@ const MODEL_CONTEXT = new Map([
   ["z-ai/glm-5-turbo", 202_752],
   ["z-ai/glm-5.1", 200_000],
   ["z-ai/glm-5.2", 1_000_000],
+  ["z-ai/glm-5.3", 1_000_000],
+  ["z-ai/glm-5.3-flash", 1_000_000],
   ["deepseek/deepseek-v3.2", 128_000],
   ["deepseek/deepseek-chat-v3.1", 128_000],
   ["deepseek/deepseek-v4-flash", 1_000_000],
@@ -284,6 +286,8 @@ const MODELS = [
   ["z-ai/glm-5-turbo", "GLM 5 Turbo ($ Credits)"],
   ["z-ai/glm-5.1", "GLM 5.1 ($ Credits)"],
   ["z-ai/glm-5.2", "GLM 5.2 ($ Credits)"],
+  ["z-ai/glm-5.3", "GLM 5.3 ($ Credits)"],
+  ["z-ai/glm-5.3-flash", "GLM 5.3 Flash ($ Credits)"],
   ["deepseek/deepseek-v3.2", "DeepSeek V3.2"],
   ["deepseek/deepseek-chat-v3.1", "DeepSeek Chat V3.1"],
   ["deepseek/deepseek-v4-flash", "DeepSeek V4 Flash"],
@@ -339,6 +343,8 @@ const MODEL_ALIASES = new Map([
   ["glm", "z-ai/glm-5.2"],
   ["glm-5", "z-ai/glm-5"],
   ["glm-5.2", "z-ai/glm-5.2"],
+  ["glm-5.3", "z-ai/glm-5.3"],
+  ["glm-5.3-flash", "z-ai/glm-5.3-flash"],
 ]);
 
 const color = {
