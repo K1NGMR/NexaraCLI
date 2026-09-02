@@ -28,6 +28,35 @@ web API. The web server selects the model, applies quotas and credits, and calls
 OpenRouter-class routers using server-side environment variables. The CLI never needs
 the provider API keys and should not be changed to call those providers directly.
 
+## How conversation data is isolated (Supabase RLS)
+
+Saved threads and messages live in Supabase and are read both by the Nexara web
+app and by this CLI — the CLI connects with the publishable/anon key under the
+signed-in user's own session, never with the service-role key. Isolation is
+therefore enforced by Supabase Row Level Security, whose rules are defined in the
+web app's version-controlled migrations (`Nexera/supabase/migrations/`):
+
+- `threads` and `messages` have RLS enabled, and the baseline policy for each is
+  owner-only: `USING (auth.uid() = user_id)` for both reads and writes.
+- The only additional access is opt-in and narrowly scoped: read-only access to
+  threads a user explicitly marked public (share links), and read/write access
+  to a thread whose owner invited them as a collaborator (`thread_collaborators`
+  rows). No migration drops, disables, or widens the owner-only baseline.
+- A user cannot list, read, or write another user's threads or messages through
+  the Supabase API by guessing ids — every query is filtered by the same RLS.
+- The CLI further restricts its own thread lists to conversations it started
+  (`origin = 'cli'`); chat requests themselves always go through the Nexara web
+  API so server-side quotas and billing apply.
+
+If you self-host and want to audit the live policies, the canonical check is:
+
+```sql
+select schemaname, tablename, policyname, cmd, roles
+from pg_policies
+where tablename in ('threads', 'messages', 'thread_collaborators')
+order by tablename, cmd;
+```
+
 For a self-hosted deployment, set these public client values at runtime rather
 than committing them:
 
