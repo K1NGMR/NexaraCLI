@@ -24,7 +24,7 @@ service credentials.
 
 The CLI authenticates a user with Supabase and sends chat requests to the Nexara
 web API. The web server selects the model, applies quotas and credits, and calls
-xKiro/OpenRouter using server-side environment variables. The CLI never needs
+OpenRouter-class routers using server-side environment variables. The CLI never needs
 the provider API keys and should not be changed to call those providers directly.
 
 For a self-hosted deployment, set these public client values at runtime rather

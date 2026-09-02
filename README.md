@@ -125,7 +125,7 @@ $env:NEXARA_SUPABASE_URL = "https://your-project.supabase.co"
 $env:NEXARA_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_..."
 ```
 
-The CLI never needs or accepts Nexara's server-side OpenRouter, xKiro, Tavily, PayPal, Discord, or Supabase service-role secrets.
+The CLI never needs or accepts Nexara's server-side OpenRouter, Tavily, PayPal, Discord, or Supabase service-role secrets.
 
 ## Development
 
