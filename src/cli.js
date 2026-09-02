@@ -8,7 +8,13 @@ import { createThread, listThreads, loadThread, sendChat, transcribeAudio, userM
 import { loadConfig, saveConfig } from "./config.js";
 import { startMicRecording } from "./mic.js";
 import { printQr } from "./qr.js";
-import { CURRENT_VERSION, scheduleAutoUpdate } from "./update.js";
+import {
+  CURRENT_VERSION,
+  isAutoUpdateEnabled,
+  manualUpdate,
+  scheduleAutoUpdate,
+  setAutoUpdateEnabled,
+} from "./update.js";
 
 // Keep base64-encoded request bodies below common serverless request limits.
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
@@ -428,6 +434,7 @@ ${color.cyan("Nexara CLI commands")}
   /clear                        Clear local context and create a fresh thread
   /compact                      Summarize the conversation to free the context window
   /config                       Show the local config path
+  /update                       Check for and install updates (when auto-update is off)
   /status                       Show account, model, and thread state
   /quit                         Exit the CLI
 
@@ -435,10 +442,19 @@ ${color.dim("Voice: press M at the prompt to record your mic; press M again to")
 ${color.dim("stop and transcribe your words into the input (speech-to-text).")}
 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
+${color.dim("Updates: nexara update (install now), nexara update --on / --off (toggle silent background updates)")}
 ${color.dim("Outside the REPL, use: nexara \"prompt\", nexara -p \"prompt\", --image file.png, --model deepseek-v4-flash, --effort high, --continue")}
 `);
 }function parseArgs(argv) {
-  const options = { prompt: [], images: [], print: false, continue: false, google: false, qr: false, help: false, version: false };
+  const options = { prompt: [], images: [], print: false, continue: false, google: false, qr: false, help: false, version: false, updateMode: null };
+  // Subcommand flags for `nexara update`: toggle silent auto-updates or show
+  // the install's update state. Kept out of the chat prompt path.
+  if (argv[0] === "update") {
+    if (argv[1] === "--on" || argv[1] === "--off" || argv[1] === "--status") {
+      options.updateMode = argv[1].slice(2);
+      argv = argv.filter((_, index) => index !== 1);
+    }
+  }
   const requiredValue = (index, flag, description) => {
     const value = argv[index + 1];
     if (!value || value.startsWith("-")) throw new Error(`${flag} requires ${description}.`);
@@ -737,6 +753,7 @@ async function handleSlash(state, line) {
       return true;
     }
     case "/config": console.log(`Config: ${state.configPath}`); return true;
+    case "/update": await runUpdateCommand([]); return true;
     case "/status": {
       const user = await state.auth.user();
       // Real usage from the last turn when available; heuristic otherwise.
@@ -889,6 +906,37 @@ async function oneShot(config, auth, options, configPath) {
   if (options.print) process.stdout.write("\n");
 }
 
+/** `nexara update [--on|--off]` and the REPL's `/update`.
+ *  - bare       Check for a newer version; if one exists, install it now in
+ *               the foreground (the CLI restarts into the new version next run)
+ *  - --on/--off Persist the silent auto-update preference
+ *  - --status   Show whether silent auto-updates are on and what version is
+ *               installed (no network call, works offline)
+ */
+async function runUpdateCommand(args, { quiet = false } = {}) {
+  const enable = args.includes("--on");
+  const disable = args.includes("--off");
+  if (enable || disable) {
+    const enabled = setAutoUpdateEnabled(enable);
+    console.log(
+      enabled
+        ? color.green("Silent background updates are ON — newer CLI versions install automatically.")
+        : color.green("Silent background updates are OFF. Update manually whenever you like with: nexara update"),
+    );
+    return;
+  }
+  if (args.includes("--status")) {
+    const auto = isAutoUpdateEnabled();
+    console.log(
+      `Nexara CLI ${CURRENT_VERSION}\nAuto-update: ${auto ? "enabled (silent background installs)" : "disabled — run \u201cnexara update\u201d to update manually"}`,
+    );
+    return;
+  }
+  const result = await manualUpdate();
+  if (!quiet) console.log(result.ok ? color.green(result.message) : color.red(result.message));
+  else diagnostic(result.message);
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const config = loadConfig();
@@ -897,8 +945,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (options.version) { console.log(CURRENT_VERSION); return; }
   // Never block startup on GitHub. The detached worker updates the global
   // install in the background, so this command remains usable offline and
-  // the next invocation automatically runs the new version.
-  void scheduleAutoUpdate();
+  // the next invocation automatically runs the new version. Manual runs
+  // (`nexara update`) check for themselves, so skip the background one.
+  if (!(options.prompt[0] === "update" && options.prompt.length === 1)) void scheduleAutoUpdate();
   if (options.appUrl) saveConfig({ appUrl: options.appUrl });
   const nextConfig = loadConfig();
   if (options.model) {
@@ -911,6 +960,10 @@ export async function main(argv = process.argv.slice(2)) {
   const command = options.prompt[0];
   if (command === "login" && options.prompt.length === 1) { await login(nextConfig, auth, options.google, options.qr); return; }
   if (command === "logout" && options.prompt.length === 1) { await auth.logout(); console.log("Signed out."); return; }
+  if (command === "update" && options.prompt.length === 1) {
+    await runUpdateCommand(options.updateMode ? [`--${options.updateMode}`] : []);
+    return;
+  }
   if (command === "whoami" && options.prompt.length === 1) { const user = await auth.user(); console.log(user?.email || "Not signed in."); return; }
   if (options.print || options.prompt.length > 0 || options.images.length > 0 || (options.continue && options.prompt.length > 0)) {
     await oneShot(nextConfig, auth, { ...options, prompt: options.prompt[0] === "login" ? [] : options.prompt }, configPath);

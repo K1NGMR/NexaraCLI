@@ -1,3 +1,9 @@
+param(
+  # Install with silent background updates disabled. Updates are then manual
+  # only: run `nexara update` whenever you want to install a newer version.
+  [switch]$DisableAutoUpdate
+)
+
 $ErrorActionPreference = 'Stop'
 $repo = 'https://github.com/K1NGMR/NexaraCLI/archive/refs/heads/main.zip'
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('nexara-cli-' + [guid]::NewGuid().ToString())
@@ -37,7 +43,25 @@ try {
     throw "Nexara CLI installed without its entrypoint: $entrypoint"
   }
   Write-Host 'Installed. Run: nexara' -ForegroundColor Green
-  Write-Host 'Automatic updates are enabled; newer CLI releases install silently in the background.' -ForegroundColor DarkGray
+  if ($DisableAutoUpdate) {
+    try {
+      $configDir = Join-Path $HOME '.nexara'
+      New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+      $configFile = Join-Path $configDir 'config.json'
+      $existing = @{}
+      if (Test-Path -LiteralPath $configFile) {
+        $parsed = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
+        if ($parsed) { $parsed.psobject.Properties | ForEach-Object { $existing[$_.Name] = $_.Value } }
+      }
+      $existing['autoUpdate'] = $false
+      $existing | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configFile -Encoding UTF8
+    } catch {
+      # Best effort — the CLI also honors NEXARA_NO_AUTO_UPDATE=1 per run.
+    }
+    Write-Host 'Silent background updates are DISABLED. To update later, run: nexara update' -ForegroundColor DarkGray
+  } else {
+    Write-Host 'Automatic updates are enabled; newer CLI releases install silently in the background. Disable them with: nexara update --off' -ForegroundColor DarkGray
+  }
 } finally {
   Remove-Item -Path $temp -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue

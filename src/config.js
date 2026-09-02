@@ -16,6 +16,10 @@ const DEFAULT_CONFIG = {
   selectedReasoningEffort: "medium",
   lastThreadId: null,
   session: null,
+  /** Silent background updates. Opt out with `nexara update --off` (or
+   * install with the -DisableAutoUpdate switch), then update manually with
+   * `nexara update` whenever you choose. */
+  autoUpdate: true,
 };
 
 export function loadConfig() {

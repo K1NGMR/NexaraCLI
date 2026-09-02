@@ -4,7 +4,11 @@ param(
   [string]$TargetVersion,
 
   [Parameter(Mandatory = $true)]
-  [string]$StateFile
+  [string]$StateFile,
+
+  # When set, progress is shown (used by `nexara update`, which runs in the
+  # foreground). Background auto-updates stay silent.
+  [switch]$VerboseOutput
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,24 +35,41 @@ function Write-State([hashtable]$Patch) {
   }
 }
 
-try {
-  $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-  if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
-  if (-not $npm) { throw 'npm was not found on PATH.' }
+function Fail([string]$Message) {
+  Write-State @{
+    status = 'error'
+    targetVersion = $TargetVersion
+    error = $Message.Substring(0, [Math]::Min(300, $Message.Length))
+    failedAt = [DateTime]::UtcNow.ToString('o')
+  }
+  if ($VerboseOutput) {
+    Write-Host ("Update failed: $Message") -ForegroundColor Red
+  }
+  exit 1
+}
 
+try {
+  if ($VerboseOutput) { Write-Host "Downloading nexara-cli $TargetVersion..." -ForegroundColor Cyan }
   New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
-  Invoke-WebRequest -Uri "$archiveUrl?update=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" -OutFile $zipFile -UseBasicParsing
+  Invoke-WebRequest -Uri $archiveUrl -OutFile $zipFile -UseBasicParsing
   Expand-Archive -LiteralPath $zipFile -DestinationPath $tempRoot -Force
 
   $archiveRoot = Get-ChildItem -LiteralPath $tempRoot -Directory | Select-Object -First 1
-  if (-not $archiveRoot) { throw 'The GitHub archive was empty.' }
+  if (-not $archiveRoot) { Fail 'The GitHub archive was empty.' }
   $cliRoot = $archiveRoot.FullName
   $packageFile = Join-Path $cliRoot 'package.json'
-  if (-not (Test-Path -LiteralPath $packageFile)) { throw 'The NexaraCLI package was not found in the GitHub archive.' }
+  if (-not (Test-Path -LiteralPath $packageFile)) { Fail 'The NexaraCLI package was not found in the GitHub archive.' }
 
-  $globalRoot = (& $npm.Source root --global).Trim()
-  $globalPrefix = (& $npm.Source prefix --global).Trim()
-  if (-not $globalRoot -or -not $globalPrefix) { throw 'Could not determine npm global install paths.' }
+  $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+  if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
+  if (-not $npm) { Fail 'npm was not found on PATH.' }
+
+  # Query the npm global paths the same way every other path does (npm.cmd is
+  # a batch file, so cmd.exe runs it).
+  $globalRoot = (& cmd.exe /c "`"$($npm.Source)`" root --global" | Out-String).Trim()
+  $globalPrefix = (& cmd.exe /c "`"$($npm.Source)`" prefix --global" | Out-String).Trim()
+  if (-not $globalRoot -or -not $globalPrefix) { Fail 'Could not determine npm global install paths.' }
+
   $oldPackage = Join-Path $globalRoot 'nexara-cli'
   if (Test-Path -LiteralPath $oldPackage) {
     Remove-Item -LiteralPath $oldPackage -Recurse -Force -ErrorAction SilentlyContinue
@@ -59,10 +80,28 @@ try {
       Remove-Item -LiteralPath $shimPath -Force -ErrorAction SilentlyContinue
     }
   }
-  & $npm.Source install --global $cliRoot --no-fund --no-audit --force *> $null
-  if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
+
+  # Drive npm through cmd.exe. Calling npm.cmd directly from PowerShell while
+  # silencing stderr is a trap: PowerShell turns npm's stderr noise (e.g. the
+  # "using --force" warning) into an error object, which trips
+  # $ErrorActionPreference = 'Stop' and aborts the update EVEN WHEN npm
+  # succeeded. cmd /c runs npm cleanly and lets us check the real exit code.
+  # Verbose (manual) runs show output; silent (background) runs redirect npm's
+  # noise to nul INSIDE cmd.exe (cmd syntax — PowerShell's *> would also
+  # trigger the stderr-to-error trap this avoids).
+  if ($VerboseOutput) {
+    Write-Host "Installing nexara-cli $TargetVersion globally..." -ForegroundColor Cyan
+    & cmd.exe /c "`"$($npm.Source)`" install --global `"$cliRoot`" --no-fund --no-audit --force"
+    $npmExit = $LASTEXITCODE
+  } else {
+    & cmd.exe /c "`"$($npm.Source)`" install --global `"$cliRoot`" --no-fund --no-audit --force >nul 2>&1"
+    $npmExit = $LASTEXITCODE
+  }
+  if ($npmExit -ne 0) { Fail "npm install failed with exit code $npmExit." }
+
   $entrypoint = Join-Path $globalRoot 'nexara-cli\bin\nexara.js'
-  if (-not (Test-Path -LiteralPath $entrypoint)) { throw "Installed CLI entrypoint is missing: $entrypoint" }
+  if (-not (Test-Path -LiteralPath $entrypoint)) { Fail "Installed CLI entrypoint is missing: $entrypoint" }
+
   Write-State @{
     status = 'updated'
     currentVersion = $TargetVersion
@@ -70,14 +109,11 @@ try {
     installedAt = [DateTime]::UtcNow.ToString('o')
     error = $null
   }
-} catch {
-  Write-State @{
-    status = 'error'
-    targetVersion = $TargetVersion
-    error = ([string]$_.Exception.Message).Substring(0, [Math]::Min(300, ([string]$_.Exception.Message).Length))
-    failedAt = [DateTime]::UtcNow.ToString('o')
+  if ($VerboseOutput) {
+    Write-Host "Installed nexara-cli $TargetVersion. Start a new nexara session to use it." -ForegroundColor Green
   }
-  exit 1
+} catch {
+  Fail ([string]$_.Exception.Message)
 } finally {
   Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $zipFile -Force -ErrorAction SilentlyContinue

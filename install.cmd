@@ -1,5 +1,9 @@
 @echo off
 setlocal EnableExtensions
+rem Usage: install.cmd [/DisableAutoUpdate] — /DisableAutoUpdate installs
+rem without silent background updates; update manually with `nexara update`.
+set "DISABLE_AUTO=0"
+if /I "%~1"=="/DisableAutoUpdate" set "DISABLE_AUTO=1"
 set "TEMP_DIR=%TEMP%\nexara-cli-%RANDOM%%RANDOM%"
 set "ZIP_FILE=%TEMP_DIR%.zip"
 where node >nul 2>nul
@@ -23,7 +27,17 @@ npm install --global "%ROOT%" --no-fund --no-audit --force
 if errorlevel 1 goto :fail
 if not exist "%GLOBAL_ROOT%\nexara-cli\bin\nexara.js" goto :fail
 echo Installed. Run: nexara
-echo Automatic updates are enabled.
+if "%DISABLE_AUTO%"=="1" (
+  if not exist "%USERPROFILE%\.nexara" mkdir "%USERPROFILE%\.nexara"
+  if exist "%USERPROFILE%\.nexara\config.json" (
+    powershell -NoProfile -Command "$c = Get-Content -LiteralPath '%USERPROFILE%\.nexara\config.json' -Raw | ConvertFrom-Json; $c | Add-Member -NotePropertyName autoUpdate -NotePropertyValue $false -Force; $c | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath '%USERPROFILE%\.nexara\config.json' -Encoding UTF8"
+  ) else (
+    echo {"autoUpdate": false} > "%USERPROFILE%\.nexara\config.json"
+  )
+  echo Silent background updates are DISABLED. To update later, run: nexara update
+) else (
+  echo Automatic updates are enabled. Disable them with: nexara update --off
+)
 goto :cleanup
 :fail
 echo Nexara CLI installation failed.

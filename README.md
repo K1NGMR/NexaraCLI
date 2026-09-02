@@ -18,7 +18,7 @@ Install the latest Windows build directly from PowerShell:
 irm https://raw.githubusercontent.com/K1NGMR/NexaraCLI/main/install.ps1 | iex
 ```
 
-The installer downloads the CLI from GitHub, installs the `nexara` command globally, and enables silent background update checks. When a newer CLI version is published, it is downloaded and installed automatically; start a new `nexara` session to use it. No repeat download command is needed.
+The installer downloads the CLI from GitHub and installs the `nexara` command globally.
 
 Then run it from PowerShell **or** Command Prompt:
 
@@ -38,6 +38,39 @@ Command Prompt equivalent:
 curl -fL https://raw.githubusercontent.com/K1NGMR/NexaraCLI/main/install.cmd -o %TEMP%\\nexara-install.cmd && %TEMP%\\nexara-install.cmd && del %TEMP%\\nexara-install.cmd
 ```
 
+### Updates: silent by default, opt out at install or any time
+
+By default the CLI checks for new versions silently (at most every six hours, never blocking startup) and installs them in the background — you only notice a new version the next time you start `nexara`.
+
+You can disable that before anything is installed:
+
+```powershell
+# PowerShell — no silent background updates on this machine
+irm https://raw.githubusercontent.com/K1NGMR/NexaraCLI/main/install.ps1 | iex -DisableAutoUpdate
+```
+
+```cmd
+rem Command Prompt
+curl -fL https://raw.githubusercontent.com/K1NGMR/NexaraCLI/main/install.cmd -o %TEMP%\\nexara-install.cmd && %TEMP%\\nexara-install.cmd /DisableAutoUpdate && del %TEMP%\\nexara-install.cmd
+```
+
+…or flip the setting on an existing install whenever you like:
+
+```text
+nexara update --off     # disable silent background updates
+nexara update --on      # re-enable them
+nexara update --status  # show the current setting and installed version
+```
+
+With silent updates off, updating is fully manual and in your control — run `nexara update` and the CLI checks GitHub, downloads the newer version, and installs it in the foreground so you see exactly what happened:
+
+```text
+nexara update
+> Updated 0.1.1 → 0.1.2. Restart nexara to use the new version.
+```
+
+Inside an interactive session the same action is `/update`. One-run opt-outs (`$env:NEXARA_NO_AUTO_UPDATE = "1"`) still work too. Whatever the setting, the next `nexara` session always runs the version that was installed.
+
 For a local checkout:
 
 ```powershell
@@ -47,7 +80,7 @@ npm install
 npm install --global .
 ```
 
-The standalone source repository is https://github.com/K1NGMR/NexaraCLI. The package name can change when you publish it; the executable remains `nexara`. Auto-updates can be disabled for one run with `$env:NEXARA_NO_AUTO_UPDATE = "1"`; checks run at most every six hours and never block offline startup.
+The standalone source repository is https://github.com/K1NGMR/NexaraCLI. The package name can change when you publish it; the executable remains `nexara`. Checks run at most every six hours and never block offline startup.
 
 ## First run
 
