@@ -1061,9 +1061,37 @@ async function selectWorkspaceTrust() {
   });
 }
 
+function wrapChatText(text, width = Math.max(24, terminalWidth() - 6)) {
+  const rows = [];
+  for (const sourceLine of String(text || "").split(/\r?\n/)) {
+    if (!sourceLine) {
+      rows.push("");
+      continue;
+    }
+    let remaining = sourceLine;
+    while (remaining.length > width) {
+      let cut = remaining.lastIndexOf(" ", width);
+      if (cut < Math.floor(width * 0.55)) cut = width;
+      rows.push(remaining.slice(0, cut));
+      remaining = remaining.slice(cut).replace(/^\s+/, "");
+    }
+    rows.push(remaining);
+  }
+  return rows;
+}
+
+function userTurnLine(text) {
+  const width = Math.max(20, terminalWidth());
+  const visible = String(text || "").slice(0, width);
+  const padded = visible + " ".repeat(Math.max(0, width - visible.length));
+  // Claude-style full-width prompt row: it separates the user's request from
+  // the assistant transcript without turning the response into a card.
+  return ansi("48;2;48;46;43;38;2;250;249;245", padded);
+}
+
 function printUserTurn(text, files = []) {
   console.log();
-  console.log(`  ${color.muted("›")} ${color.cream(text)}`);
+  for (const line of wrapChatText(text)) console.log(userTurnLine(`> ${line}`));
   if (files.length) {
     console.log(`  ${color.muted("  attachments")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
   }
@@ -1071,7 +1099,13 @@ function printUserTurn(text, files = []) {
 
 function printAssistantHeader(state, mode) {
   const modeLabel = mode ? ` · ${mode}` : "";
-  process.stdout.write(`\n${color.coral("✦")} ${color.cream("Nexara")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
+  process.stdout.write(`\n${color.coral("●")} ${color.cream("Nexara")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
+}
+
+function printTurnComplete(startedAt) {
+  const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+  const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
+  console.log(color.dim(`* Worked for ${elapsedSeconds}s · done ${clock}`));
 }
 
 function printSessionFooter(state) {
@@ -1668,6 +1702,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
       outputToolEvent(state, { type: "budget-stop", message: messageText });
       break;
     }
+    const turnStartedAt = Date.now();
     const activity = createActivityLine({ quiet, streamJson: machine });
     const serverArtifacts = [];
     const controller = new AbortController();
@@ -1744,6 +1779,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
     if (!quiet && assistant.sources?.length) {
       console.log(`  ${color.muted("Sources")} ${assistant.sources.map((source) => color.cyan(typeof source === "string" ? source : source.url || source.title || "source")).join(color.muted(" · "))}`);
     }
+    if (!quiet && assistant.text?.trim()) printTurnComplete(turnStartedAt);
     const call = assistant.nativeCall;
     if (!call || !CLI_LOCAL_TOOL_NAMES.has(call.name) && call.name !== "ask_question") {
       conversation.push(assistant);

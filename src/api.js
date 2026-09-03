@@ -245,7 +245,9 @@ export async function sendChat({
   const decoder = new TextDecoder();
   const writeText = onText ?? ((text) => process.stdout.write(text));
   let buffer = "";
-  if (!quiet) process.stdout.write("\n");
+  // The caller owns the chat turn header. Adding a leading newline here made
+  // the assistant response feel detached from its prompt and created a
+  // visible pause before the first streamed token.
   while (true) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
