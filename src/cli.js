@@ -364,11 +364,13 @@ const MODEL_ALIASES = new Map([
 ]);
 
 const color = {
+  blue: (text) => `\u001b[34m${text}\u001b[0m`,
   cyan: (text) => `\u001b[36m${text}\u001b[0m`,
   dim: (text) => `\u001b[2m${text}\u001b[0m`,
   green: (text) => `\u001b[32m${text}\u001b[0m`,
   magenta: (text) => `\u001b[35m${text}\u001b[0m`,
   red: (text) => `\u001b[31m${text}\u001b[0m`,
+  white: (text) => `\u001b[37m${text}\u001b[0m`,
   yellow: (text) => `\u001b[33m${text}\u001b[0m`,
 };
 
@@ -376,10 +378,34 @@ function diagnostic(text) {
   process.stderr.write(`${text}\n`);
 }
 
+function displayPath(directory = process.cwd()) {
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  if (home && directory.toLowerCase().startsWith(home.toLowerCase())) {
+    return `~${directory.slice(home.length)}`;
+  }
+  return directory;
+}
+
 function printBanner(config) {
-  console.log(color.cyan("\n  ✦ Nexara CLI") + color.dim("  —  AI in your terminal"));
-  console.log(color.dim(`  model: ${modelLabel(config.selectedModel)}   effort: ${config.selectedReasoningEffort || "medium"}   app: ${config.appUrl}`));
-  console.log(color.dim("  Type /help for commands. Ctrl+C twice exits.\n"));
+  console.log();
+  console.log(color.cyan("  ╭──────────────────────────────────────────────────────────╮"));
+  console.log(color.cyan("  │") + `  ${color.white("✦ Nexara")}${color.dim("  ·  AI in your terminal")}` + color.cyan("                  │"));
+  console.log(color.cyan("  │") + color.dim(`  model      ${modelLabel(config.selectedModel)}`) + color.cyan("                              │"));
+  console.log(color.cyan("  │") + color.dim(`  directory  ${displayPath()}`) + color.cyan("                    │"));
+  console.log(color.cyan("  ╰──────────────────────────────────────────────────────────╯"));
+  console.log();
+  console.log(color.dim("  Start with a task, or try one of these commands:"));
+  console.log(`  ${color.cyan("/help")} ${color.dim("commands")}   ${color.cyan("/model")} ${color.dim("change model")}   ${color.cyan("/status")} ${color.dim("session info")}   ${color.cyan("/quit")} ${color.dim("exit")}`);
+  console.log(color.dim("  Press Ctrl+C twice to exit.\n"));
+}
+
+function printLoginScreen() {
+  console.log();
+  console.log(color.cyan("  ╭──────────────────────────────────────────────╮"));
+  console.log(color.cyan("  │") + `  ${color.white("Sign in to Nexara")}${color.dim("                         ")} ` + color.cyan("│"));
+  console.log(color.cyan("  │") + color.dim("  Your account, models, and saved threads.      ") + color.cyan("│"));
+  console.log(color.cyan("  ╰──────────────────────────────────────────────╯"));
+  console.log();
 }
 
 function modelLabel(id) {
@@ -436,6 +462,7 @@ ${color.cyan("Nexara CLI commands")}
   /config                       Show the local config path
   /update                       Check for and install updates (when auto-update is off)
   /status                       Show account, model, and thread state
+  /login                        Sign in again or switch account
   /quit                         Exit the CLI
 
 ${color.dim("Voice: press M at the prompt to record your mic; press M again to")}
@@ -541,6 +568,21 @@ async function completeGoogleProfile(auth, user) {
 }
 
 async function login(config, auth, useGoogle = false, useQr = false) {
+  if (!useGoogle && !useQr) {
+    printLoginScreen();
+    const methodRl = readline.createInterface({ input, output });
+    let selectedGoogle = false;
+    let selectedQr = false;
+    try {
+      const method = (await methodRl.question(`  ${color.cyan("How would you like to sign in?")} ${color.dim("[1] Email  [2] Google  [3] QR")}\n  › `)).trim().toLowerCase();
+      selectedGoogle = method === "2" || method === "g" || method === "google";
+      selectedQr = method === "3" || method === "q" || method === "qr";
+    } finally {
+      methodRl.close();
+    }
+    if (selectedGoogle) return login(config, auth, true, false);
+    if (selectedQr) return login(config, auth, false, true);
+  }
   if (useQr) {
     const user = await auth.loginWithQr(config.appUrl, (status) => {
       if (status.type === "code") {
@@ -564,10 +606,10 @@ async function login(config, auth, useGoogle = false, useQr = false) {
   }
   const rl = readline.createInterface({ input, output });
   try {
-    const email = (await rl.question("Nexara email: ")).trim();
-    const password = await rl.question("Nexara password: ", { hideEchoBack: true });
+    const email = (await rl.question(`  ${color.cyan("Email")} › `)).trim();
+    const password = await rl.question(`  ${color.cyan("Password")} › `, { hideEchoBack: true });
     const user = await auth.login(email, password);
-    console.log(color.green(`Signed in as ${user.email || email}.`));
+    console.log(color.green(`\n  ✓ Signed in as ${user.email || email}.`));
   } finally {
     rl.close();
   }
@@ -598,7 +640,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
       state.config.selectedModel,
       contextOf([...state.messages, message]) + 1_600,
     );
-    process.stdout.write(color.magenta("nexara ") + color.dim("· "));
+    process.stdout.write(color.cyan("› ") + color.dim(" "));
   }
   const assistant = await sendChat({
     auth: state.auth,
@@ -759,6 +801,7 @@ async function handleSlash(state, line) {
       return true;
     }
     case "/config": console.log(`Config: ${state.configPath}`); return true;
+    case "/login": await login(state.config, state.auth); return true;
     case "/update": await runUpdateCommand([]); return true;
     case "/status": {
       const user = await state.auth.user();
@@ -792,7 +835,7 @@ async function handleSlash(state, line) {
 async function interactive(config, auth, configPath, existingState) {
   const state = existingState || { config, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
   printBanner(config);
-  const rl = readline.createInterface({ input, output, prompt: color.cyan("you ") });
+  const rl = readline.createInterface({ input, output, prompt: color.cyan("› ") });
 
   // Push-to-talk: press M at the prompt to start recording, press M again to
   // stop and transcribe. The transcript is appended to the current line.
