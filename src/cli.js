@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { emitKeypressEvents } from "node:readline";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
@@ -596,25 +597,110 @@ async function confirmWorkspace(config) {
   console.log(color.muted("  Quick safety check: Is this a project you created or one you trust?"));
   console.log(color.muted("  Nexara can use files you explicitly attach from this folder."));
   console.log();
-  console.log(`  ${color.coral("> ")} ${color.cream("No, exit")}`);
-  console.log(`    ${color.muted("Yes, I trust this folder")}`);
-  console.log();
-  console.log(color.dim("  Press Enter to exit · type y then Enter to trust · Ctrl+C cancels"));
-  const rl = readline.createInterface({ input, output });
-  try {
-    const answer = (await rl.question(`  ${color.coral("› ")}`)).trim().toLowerCase();
-    if (answer !== "y" && answer !== "yes" && answer !== "2") {
-      console.log(color.yellow("\n  Workspace not trusted. Nexara is exiting."));
-      return false;
-    }
-  } finally {
-    rl.close();
+  const selected = await selectWorkspaceTrust();
+  if (!selected) {
+    console.log(color.yellow("\n  Workspace not trusted. Nexara is exiting."));
+    return false;
   }
   const directories = Array.isArray(config.trustedDirectories) ? config.trustedDirectories : [];
   saveConfig({ trustedDirectories: [...new Set([...directories, directory])] });
   console.log(color.teal("\n  ✓ Workspace trusted for future Nexara sessions.\n"));
   console.log();
   return true;
+}
+
+async function selectWorkspaceTrust() {
+  const options = [
+    { label: "No, exit", description: "Leave this workspace and close Nexara." },
+    { label: "Yes, I trust this folder", description: "Remember this folder for future sessions." },
+  ];
+  let selected = 0;
+
+  const render = () => {
+    const lines = options.map((option, index) => {
+      const active = index === selected;
+      const marker = active ? color.coral("›") : color.dim("·");
+      const label = active ? color.cream(option.label) : color.muted(option.label);
+      const description = active ? color.muted(` — ${option.description}`) : "";
+      return `  ${marker} ${label}${description}`;
+    });
+    lines.push(color.dim("  ↑/↓ or numpad 8/2 to move · Enter to select · Esc to cancel"));
+    return lines;
+  };
+
+  if (typeof input.setRawMode !== "function") {
+    const rl = readline.createInterface({ input, output });
+    try {
+      const answer = (await rl.question(`  ${color.coral("› ")}`)).trim().toLowerCase();
+      return answer === "y" || answer === "yes" || answer === "2";
+    } finally {
+      rl.close();
+    }
+  }
+
+  emitKeypressEvents(input);
+  const previousRawMode = input.isRaw;
+  input.setRawMode(true);
+  input.resume();
+  output.write("\u001b[?25l");
+  let lines = render();
+  output.write(lines.join("\r\n"));
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      input.removeListener("keypress", onKeypress);
+      input.setRawMode(Boolean(previousRawMode));
+      output.write("\r\n\u001b[?25h");
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const redraw = () => {
+      output.write(`\u001b[${lines.length - 1}A`);
+      lines = render();
+      output.write(lines.map((line) => `\u001b[2K\r${line}`).join("\r\n"));
+    };
+    const onKeypress = (str, key = {}) => {
+      const name = String(key.name || "").toLowerCase();
+      const sequence = key.sequence || str || "";
+      const up = name === "up" || name === "k" || name === "8" || sequence === "\u001b[A" || sequence === "\u001bOA";
+      const down = name === "down" || name === "j" || name === "2" || sequence === "\u001b[B" || sequence === "\u001bOB";
+      const previous = name === "left" || name === "4" || sequence === "\u001b[D" || sequence === "\u001bOD";
+      const next = name === "right" || name === "6" || sequence === "\u001b[C" || sequence === "\u001bOC";
+      if (key.ctrl && name === "c") {
+        finish(false, new Error("Aborted with Ctrl+C"));
+        return;
+      }
+      if (name === "escape" || sequence === "\u001b") {
+        finish(false);
+        return;
+      }
+      if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
+        finish(selected === 1);
+        return;
+      }
+      if (name === "y" || str === "y" || str === "Y") {
+        selected = 1;
+        redraw();
+        return;
+      }
+      if (name === "n" || str === "n" || str === "N") {
+        selected = 0;
+        redraw();
+        return;
+      }
+      if (up || previous) {
+        selected = (selected + options.length - 1) % options.length;
+        redraw();
+      } else if (down || next) {
+        selected = (selected + 1) % options.length;
+        redraw();
+      }
+    };
+    input.on("keypress", onKeypress);
+  });
 }
 
 function printAssistantHeader(state, mode) {
