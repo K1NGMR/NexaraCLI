@@ -257,7 +257,8 @@ export async function sendChat({
     if (done) break;
   }
   if (buffer) consumeDataLine(buffer, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish);
-  if (!quiet) process.stdout.write("\n");
+  // The CLI owns the final response renderer. Do not emit a bare newline here:
+  // doing so leaves an empty gap before the formatted assistant message.
 
   return {
     id: id(),

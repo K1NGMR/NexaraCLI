@@ -517,6 +517,7 @@ function activityText(status) {
     waiting: "Processing shared Nexara context…",
     connecting: "Connecting to Nexara…",
     thinking: "Thinking…",
+    writing: "Writing response…",
     processing: "Processing shared context…",
     complete: "Done",
   })[status] || String(status || "Working…");
@@ -1189,6 +1190,92 @@ function printSessionFooter(state) {
   return lines.length;
 }
 
+function renderTerminalInlineMarkdown(value, colorize = true) {
+  const paint = (fn, text) => colorize ? fn(text) : text;
+  const tokens = [];
+  const stash = (valueToKeep) => {
+    const token = `\u0000${tokens.length}\u0000`;
+    tokens.push(valueToKeep);
+    return token;
+  };
+  let line = String(value || "").replace(/\\([\\`*_[\]{}()#+.!>-])/g, "$1");
+  line = line.replace(/`([^`\n]+)`/g, (_match, code) => stash(paint(color.teal, code)));
+  line = line.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (_match, label, url) => stash(`${paint(color.teal, label)} ${paint(color.dim, `(${url})`)}`));
+  line = line.replace(/(\*\*|__)(.+?)\1/g, (_match, _marker, content) => stash(colorize ? ansi("1;38;2;250;249;245", content) : content));
+  line = line.replace(/~~(.+?)~~/g, (_match, content) => stash(paint(color.dim, content)));
+  line = line.replace(/(?<!\w)(\*|_)([^*_\n]+)\1(?!\w)/g, (_match, _marker, content) => stash(colorize ? ansi("3;38;2;160;157;150", content) : content));
+  line = line.replace(/\u0000(\d+)\u0000/g, (_match, index) => tokens[Number(index)] || "");
+  // If a model sends an unmatched emphasis marker, never expose the raw
+  // Markdown punctuation as part of the user-facing answer.
+  return line.replace(/\*\*|__/g, "");
+}
+
+function renderTerminalMarkdown(text, { colorize = true } = {}) {
+  const paint = (fn, value) => colorize ? fn(value) : value;
+  const lines = String(text || "").replace(/\r\n?/g, "\n").replace(ANSI_RE, "").split("\n");
+  const rendered = [];
+  let inFence = false;
+  let fenceChar = "`";
+  let fenceLanguage = "";
+  for (const sourceLine of lines) {
+    const fence = sourceLine.match(/^\s*(`{3,}|~{3,})\s*([^ ]*)?.*$/);
+    if (fence) {
+      const char = fence[1][0];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = char;
+        fenceLanguage = String(fence[2] || "").trim();
+        rendered.push(`  ${paint(color.muted, `┌─ ${fenceLanguage || "code"}`)}`);
+      } else if (char === fenceChar) {
+        inFence = false;
+        rendered.push(`  ${paint(color.muted, "└─")}`);
+      } else {
+        rendered.push(`  ${paint(color.muted, "│")} ${paint(color.cream, sourceLine)}`);
+      }
+      continue;
+    }
+    if (inFence) {
+      rendered.push(`  ${paint(color.muted, "│")} ${paint(color.cream, sourceLine)}`);
+      continue;
+    }
+    if (!sourceLine.trim()) {
+      rendered.push("");
+      continue;
+    }
+    const heading = sourceLine.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      rendered.push(`${paint(color.coral, "▸")} ${paint(color.cream, renderTerminalInlineMarkdown(heading[1], colorize))}`);
+      continue;
+    }
+    const quote = sourceLine.match(/^(\s*)>\s?(.*)$/);
+    if (quote) {
+      rendered.push(`${quote[1]}${paint(color.muted, "│")} ${renderTerminalInlineMarkdown(quote[2], colorize)}`);
+      continue;
+    }
+    const list = sourceLine.match(/^(\s*)([-+*])\s+(.*)$/);
+    if (list) {
+      const checkbox = list[3].match(/^\[([ xX])\]\s+(.*)$/);
+      const marker = checkbox
+        ? checkbox[1].toLowerCase() === "x" ? paint(color.teal, "✓") : paint(color.muted, "○")
+        : paint(color.coral, "•");
+      const content = checkbox ? checkbox[2] : list[3];
+      rendered.push(`${list[1]}${marker} ${renderTerminalInlineMarkdown(content, colorize)}`);
+      continue;
+    }
+    const numbered = sourceLine.match(/^(\s*)(\d+)[.)]\s+(.*)$/);
+    if (numbered) {
+      rendered.push(`${numbered[1]}${paint(color.coral, `${numbered[2]}.`)} ${renderTerminalInlineMarkdown(numbered[3], colorize)}`);
+      continue;
+    }
+    if (/^\s*(?:---+|___+|\*\s*\*\s*\*+)\s*$/.test(sourceLine)) {
+      rendered.push(`  ${paint(color.muted, "─".repeat(Math.max(12, Math.min(terminalWidth() - 6, 72))))}`);
+      continue;
+    }
+    rendered.push(renderTerminalInlineMarkdown(sourceLine, colorize));
+  }
+  return rendered.join("\n").replace(/\n+$/, "");
+}
+
 function modelLabel(id) {
   return MODELS.find(([modelId]) => modelId === id)?.[1] || id;
 }
@@ -1771,10 +1858,17 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
     const previousCancel = state.cancelCurrent;
     const cancel = () => controller.abort();
     state.cancelCurrent = cancel;
+    let streamedText = "";
+    let responseStarted = false;
     const writeText = (delta) => {
-      activity.clear();
       if (machine) outputToolEvent(state, { type: "text-delta", delta });
-      else if (state.outputFormat !== "json") process.stdout.write(delta);
+      else if (state.outputFormat !== "json") {
+        streamedText += delta;
+        if (!responseStarted) {
+          responseStarted = true;
+          activity.set("writing");
+        }
+      }
     };
     let assistant;
     try {
@@ -1826,6 +1920,14 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
     }
     activity.clear();
     lastAssistant = assistant;
+    const responseText = assistant.text || streamedText;
+    if (responseText && !assistant.text) {
+      assistant.text = responseText;
+      assistant.parts = [{ type: "text", text: responseText }];
+    }
+    if (responseText.trim() && state.outputFormat !== "json" && !machine) {
+      process.stdout.write(`${renderTerminalMarkdown(responseText, { colorize: !state.quiet })}\n`);
+    }
     if (assistant.usage) {
       state.lastUsage = assistant.usage;
       state.spentCredits += usageCost(assistant.model || state.config.selectedModel, assistant.usage);
