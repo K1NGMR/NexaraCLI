@@ -524,7 +524,7 @@ function activityText(status) {
   })[status] || String(status || "Working…");
 }
 
-function createActivityLine({ quiet = false, streamJson = false } = {}) {
+function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0 } = {}) {
   const startedAt = Date.now();
   let status = "waiting";
   let frame = 0;
@@ -539,7 +539,10 @@ function createActivityLine({ quiet = false, streamJson = false } = {}) {
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
     const glyph = ACTIVITY_FRAMES[frame % ACTIVITY_FRAMES.length];
     const paint = [color.coral, color.violet, color.pink, color.teal][frame % 4];
-    output.write(`\r\u001b[2K  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`);
+    const line = `\r\u001b[2K  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`;
+    const offset = Math.max(0, Number(getCursorOffset()) || 0);
+    if (offset) output.write(`\u001b[${offset}A${line}\u001b[${offset}B`);
+    else output.write(line);
   };
   if (!quiet && !streamJson && output.isTTY) {
     timer = setInterval(() => {
@@ -558,7 +561,11 @@ function createActivityLine({ quiet = false, streamJson = false } = {}) {
     clear() {
       if (timer) clearInterval(timer);
       timer = null;
-      if (visible && output.isTTY && !streamJson) output.write("\r\u001b[2K");
+      if (visible && output.isTTY && !streamJson) {
+        const offset = Math.max(0, Number(getCursorOffset()) || 0);
+        if (offset) output.write(`\u001b[${offset}A\r\u001b[2K\u001b[${offset}B`);
+        else output.write("\r\u001b[2K");
+      }
       visible = false;
     },
     event: machine,
@@ -1951,7 +1958,7 @@ function usageCost(model, usage) {
   return ((Number(usage.inputTokens) || 0) * pricing.input + (Number(usage.outputTokens) || 0) * pricing.output) / 1_000_000;
 }
 
-async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
+async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return null;
   state.cwd ||= process.cwd();
@@ -1977,7 +1984,12 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
       break;
     }
     const turnStartedAt = Date.now();
-    const activity = createActivityLine({ quiet, streamJson: machine });
+    const activity = createActivityLine({
+      quiet,
+      streamJson: machine,
+      getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
+    });
+    onStart?.();
     const serverArtifacts = [];
     const controller = new AbortController();
     const previousCancel = state.cancelCurrent;
@@ -2010,19 +2022,22 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
         signal: controller.signal,
         onStatus: (status) => {
           activity.set(status);
-          if (!quiet && status === "processing") diagnostic(`  ${color.dim("· Syncing shared Nexara context…")}`);
         },
         onText: writeText,
         onToolCall: (call) => {
           activity.clear();
+          state.clearComposer?.();
           printToolCall(call, { streamJson: machine });
+          state.mountComposer?.();
           outputToolEvent(state, { type: "tool-call", name: call.name, input: call.arguments, toolCallId: call.toolCallId });
         },
         onToolResult: (result) => {
           serverArtifacts.push(result);
+          state.clearComposer?.();
           if (!quiet && result.name !== "create_pdf" && result.name !== "create_image" && result.name !== "edit_image") {
             printToolResult(result.name, result.output);
           }
+          state.mountComposer?.();
           outputToolEvent(state, { type: "tool-result", name: result.name, output: result.output });
         },
         onSource: (source) => outputToolEvent(state, { type: "source", source }),
@@ -2044,6 +2059,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
       if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
     }
     activity.clear();
+    state.clearComposer?.();
     lastAssistant = assistant;
     const responseText = assistant.text || streamedText;
     if (responseText && !assistant.text) {
@@ -2423,16 +2439,27 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   function clearComposerFooter() {
-    if (!composerFooterLines || !output.isTTY) return;
+    if (!composerFooterLines || !output.isTTY) {
+      state.composerFooterLines = 0;
+      return;
+    }
     // After readline accepts a line, the cursor is one row below the prompt.
     // Move to the top of the footer and erase through the old prompt.
     output.write(`\u001b[${composerFooterLines + 1}A\u001b[J`);
     composerFooterLines = 0;
+    state.composerFooterLines = 0;
   }
 
   function renderComposerFooter() {
     composerFooterLines = printSessionFooter(state);
+    state.composerFooterLines = composerFooterLines;
   }
+
+  // The streaming renderer uses these hooks to keep the composer anchored at
+  // the bottom while status updates are drawn above it.
+  state.composerFooterLines = 0;
+  state.clearComposer = clearComposerFooter;
+  state.mountComposer = showComposer;
 
   function clearSlashSuggestions(afterSubmit = false) {
     cancelSlashSuggestionTimer();
@@ -2599,7 +2626,7 @@ async function interactive(config, auth, configPath, existingState) {
           state.modalOpen = false;
         }
       } else {
-        await runPrompt(state, line, { files });
+        await runPrompt(state, line, { files, onStart: state.mountComposer });
       }
     } catch (error) {
       console.log(color.red(error instanceof Error ? error.message : String(error)));
@@ -2637,9 +2664,6 @@ async function interactive(config, auth, configPath, existingState) {
       return;
     }
     void runInteractiveLine(line, files);
-    // Keep a real composer mounted during the request so the next Enter is
-    // accepted immediately instead of waiting for the model to finish.
-    showComposer();
   };
 
   const onClose = () => {
