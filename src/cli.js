@@ -468,7 +468,7 @@ function printBanner(config, user = null) {
   console.log(color.muted(`  ${"─".repeat(Math.max(20, terminalWidth() - 2))}`));
   console.log(`  ${color.muted(`${effort} · /effort`)} `);
   console.log(color.muted(`  ${"─".repeat(Math.max(20, terminalWidth() - 2))}`));
-  console.log(`  ${color.coral("▸")} ${color.cream("auto mode on")} ${color.muted("(Shift+Tab to cycle)")} ${color.dim("· ? for shortcuts")}`);
+  console.log(`  ${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("(/model to change)")} ${color.dim("· /help for shortcuts")}`);
   console.log();
 }
 
