@@ -363,6 +363,12 @@ const MODEL_ALIASES = new Map([
   ["sensenova-6.8", "sensenova/sensenova-6.8-flash-lite"],
 ]);
 
+const SLASH_COMMANDS = [
+  "/help", "/model", "/models", "/effort", "/attach", "/image", "/think", "/research",
+  "/perplexity", "/plan", "/honest", "/goal", "/new", "/resume", "/threads", "/clear",
+  "/compact", "/config", "/login", "/update", "/status", "/quit", "/exit",
+];
+
 const color = {
   blue: (text) => `\u001b[34m${text}\u001b[0m`,
   cyan: (text) => `\u001b[36m${text}\u001b[0m`,
@@ -439,9 +445,17 @@ function resolveModel(value) {
   return partial && !LOCKED_MODELS.has(partial[0]) ? partial[0] : null;
 }
 
-function printModels(selected) {
-  console.log("\nAvailable Nexara models:");
-  for (const [id, label] of MODELS) {
+function printModels(selected, query = "") {
+  const normalizedQuery = query.trim().toLowerCase();
+  const models = normalizedQuery
+    ? MODELS.filter(([id, label]) => `${id} ${label}`.toLowerCase().includes(normalizedQuery))
+    : MODELS;
+  console.log(`\n${color.cyan("Nexara models")}${normalizedQuery ? color.dim(` · matching “${query.trim()}”`) : ""}`);
+  if (!models.length) {
+    console.log(color.yellow("  No models matched. Try a provider, family, or model name."));
+    return;
+  }
+  for (const [id, label] of models) {
     const locked = LOCKED_MODELS.has(id);
     const marker = id === selected ? color.green("●") : locked ? color.yellow("🔒") : "○";
     const pricing = MODEL_PRICING.get(id);
@@ -449,7 +463,14 @@ function printModels(selected) {
     const imageLabel = MODEL_IMAGE_INPUT.has(id) ? color.cyan(" · Vision input") : "";
     console.log(`${marker} ${label} ${color.dim(`(${id})`)}${priceLabel}${imageLabel}${locked ? color.yellow(" — unavailable") : ""}`);
   }
+  console.log(color.dim(`\n  ${models.length} model${models.length === 1 ? "" : "s"} · /model <name> to switch · Tab completes commands`));
   console.log();
+}
+
+function slashCompleter(line) {
+  if (!line.startsWith("/")) return [[], line];
+  const matches = SLASH_COMMANDS.filter((command) => command.startsWith(line.toLowerCase()));
+  return [matches.length ? matches : SLASH_COMMANDS, line];
 }
 
 function printHelp() {
@@ -481,6 +502,7 @@ ${color.cyan("Nexara CLI commands")}
 
 ${color.dim("Voice: press M at the prompt to record your mic; press M again to")}
 ${color.dim("stop and transcribe your words into the input (speech-to-text).")}
+${color.dim("Tip: type / and press Tab to autocomplete commands; use /model <name> to search models.")}
 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
 ${color.dim("Updates: nexara update (install now), nexara update --on / --off (toggle silent background updates)")}
@@ -708,11 +730,15 @@ async function handleSlash(state, line) {
   const argument = rest.join(" ").trim();
   switch (command.toLowerCase()) {
     case "/help": printHelp(); return true;
-    case "/models": printModels(state.config.selectedModel); return true;
+    case "/models": printModels(state.config.selectedModel, argument); return true;
     case "/model": {
-      if (!argument) { printModels(state.config.selectedModel); return true; }
+      if (!argument) {
+        console.log(`\n${color.cyan("Current model")}  ${modelLabel(state.config.selectedModel)}`);
+        console.log(color.dim("  Use /model <name> to switch, or /models to browse every model."));
+        return true;
+      }
       const model = resolveModel(argument);
-      if (!model) { console.log(color.red(`Unknown model: ${argument}`)); printModels(state.config.selectedModel); return true; }
+      if (!model) { console.log(color.red(`No exact model match for “${argument}”.`)); printModels(state.config.selectedModel, argument); return true; }
       state.config = saveConfig({ selectedModel: model });
       console.log(color.green(`Model switched to ${modelLabel(model)}.`));
       return true;
@@ -847,7 +873,14 @@ async function handleSlash(state, line) {
 async function interactive(config, auth, configPath, existingState) {
   const state = existingState || { config, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
   printBanner(config);
-  const rl = readline.createInterface({ input, output, prompt: color.cyan("› ") });
+  const rl = readline.createInterface({
+    input,
+    output,
+    prompt: color.cyan("› "),
+    completer: slashCompleter,
+    crlfDelay: Infinity,
+    terminal: Boolean(input.isTTY && output.isTTY),
+  });
 
   // Push-to-talk: press M at the prompt to start recording, press M again to
   // stop and transcribe. The transcript is appended to the current line.
