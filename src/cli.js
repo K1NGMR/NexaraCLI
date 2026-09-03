@@ -450,6 +450,57 @@ function diagnostic(text) {
   process.stderr.write(`${text}\n`);
 }
 
+const DOUBLE_ESCAPE_WINDOW_MS = 850;
+
+function isEscapeKey(str, key = {}) {
+  const name = String(key.name || "").toLowerCase();
+  const sequence = key.sequence || str || "";
+  return name === "escape" || sequence === "\u001b";
+}
+
+function installEscapeExit() {
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") return () => {};
+  emitKeypressEvents(input);
+  let lastEscapeAt = 0;
+  let resetTimer = null;
+  let active = true;
+  const remove = () => {
+    if (!active) return;
+    active = false;
+    input.removeListener("keypress", onKeypress);
+    if (resetTimer) clearTimeout(resetTimer);
+  };
+  const registerEscape = () => {
+    const now = Date.now();
+    if (now - lastEscapeAt <= DOUBLE_ESCAPE_WINDOW_MS) {
+      remove();
+      if (input.isRaw) input.setRawMode(false);
+      output.write("\r\n\u001b[?25h");
+      process.exit(0);
+      return;
+    }
+    lastEscapeAt = now;
+    if (resetTimer) clearTimeout(resetTimer);
+    resetTimer = setTimeout(() => {
+      lastEscapeAt = 0;
+      resetTimer = null;
+    }, DOUBLE_ESCAPE_WINDOW_MS);
+  };
+  const onKeypress = (str, key = {}) => {
+    const sequence = key.sequence || str || "";
+    for (let index = 0; index < sequence.length; index += 1) {
+      if (sequence[index] !== "\u001b") continue;
+      const next = sequence[index + 1];
+      // A terminal arrow/function-key sequence begins with ESC+[ or ESC+O;
+      // only count standalone Escape bytes, including combined double-Esc.
+      if (next === "[" || next === "O") continue;
+      registerEscape();
+    }
+  };
+  input.on("keypress", onKeypress);
+  return remove;
+}
+
 function displayPath(directory = process.cwd()) {
   const home = process.env.USERPROFILE || process.env.HOME || "";
   if (home && directory.toLowerCase().startsWith(home.toLowerCase())) {
@@ -624,7 +675,7 @@ async function selectWorkspaceTrust() {
       const description = active ? color.muted(` — ${option.description}`) : "";
       return `  ${marker} ${label}${description}`;
     });
-    lines.push(color.dim("  ↑/↓ or numpad 8/2 to move · Enter to select · Esc to cancel"));
+    lines.push(color.dim("  ↑/↓ or numpad 8/2 to move · Enter to select · Esc twice to exit"));
     return lines;
   };
 
@@ -673,10 +724,7 @@ async function selectWorkspaceTrust() {
         finish(false, new Error("Aborted with Ctrl+C"));
         return;
       }
-      if (name === "escape" || sequence === "\u001b") {
-        finish(false);
-        return;
-      }
+      if (isEscapeKey(str, key)) return;
       if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
         finish(selected === 1);
         return;
@@ -1331,6 +1379,8 @@ export async function main(argv = process.argv.slice(2)) {
   const configPath = (await import("./config.js")).CONFIG_FILE;
   if (options.help) { printHelp(); return; }
   if (options.version) { console.log(CURRENT_VERSION); return; }
+  const removeEscapeExit = installEscapeExit();
+  try {
   // Never block startup on GitHub. The detached worker updates the global
   // install in the background, so this command remains usable offline and
   // the next invocation automatically runs the new version. Manual runs
@@ -1373,4 +1423,7 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   await interactive(nextConfig, auth, configPath);
+  } finally {
+    removeEscapeExit();
+  }
 }
