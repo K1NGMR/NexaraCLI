@@ -1147,6 +1147,196 @@ function printModels(selected, query = "") {
   console.log();
 }
 
+const PROVIDER_LABELS = new Map([
+  ["router", "Router"],
+  ["openai", "OpenAI"],
+  ["moonshotai", "Moonshot AI"],
+  ["google", "Google"],
+  ["minimax", "MiniMax"],
+  ["mistralai", "Mistral AI"],
+  ["inclusion-ai", "Inclusion AI"],
+  ["stepfun", "StepFun"],
+  ["poolside", "Poolside"],
+  ["nvidia", "NVIDIA"],
+  ["meta", "Meta"],
+  ["deepseek", "DeepSeek"],
+  ["xiaomi", "Xiaomi"],
+  ["x-ai", "xAI"],
+  ["qwen", "Qwen"],
+  ["stealth", "Stealth"],
+  ["z-ai", "Z.ai"],
+  ["sensenova", "SenseNova"],
+ ]);
+
+// The catalog is maintained in the same broad order as Nexara Web. These
+// overrides settle the few cases where a lexical version sort would put a
+// smaller/fast model above the provider's flagship.
+const MODEL_STRENGTH_OVERRIDES = new Map([
+  ["router/autorouter", 1000], ["router/openrouter-free", 900],
+  ["openai/gpt-5.6-terra", 1000], ["openai/gpt-5.6-luna", 950], ["openai/gpt-5.3-codex-spark", 900], ["openai/gpt-oss-120b", 850],
+  ["google/gemini-3.1-pro", 1000], ["google/gemini-3.6-flash", 960], ["google/gemini-3.5-flash", 940], ["google/gemini-3-flash", 900], ["google/gemini-2.5-pro", 850], ["google/gemini-2.5-flash", 800],
+  ["minimax/minimax-m3", 1000], ["minimax/minimax-m2.7", 950], ["minimax/minimax-m2.7-highspeed", 940], ["minimax/minimax-m2.5", 900], ["minimax/minimax-m2.5-highspeed", 890], ["minimax/minimax-m2.1", 850], ["minimax/minimax-m2.1-highspeed", 840], ["minimax/minimax-m2", 800],
+  ["mistralai/mistral-large-2512", 1000], ["mistralai/mistral-medium-3.5", 950], ["mistralai/devstral-medium", 925], ["mistralai/codestral-2508", 900], ["mistralai/mistral-small-2603", 850], ["mistralai/ministral-14b", 800], ["mistralai/ministral-8b", 750], ["mistralai/ministral-3b", 700],
+  ["nvidia/nemotron-3-ultra", 1000], ["nvidia/nemotron-3-super", 950], ["nvidia/nemotron-3-nano-30b-a3b", 900], ["nvidia/nemotron-3-nano", 880], ["nvidia/nvidia-nemotron-nano-9b-v2", 800], ["nvidia/nemotron-nano-9b-v2", 800], ["nvidia/llama-3.3-nemotron-super-49b", 850],
+  ["qwen/qwen3.8-max", 1000], ["qwen/qwen3.7-max", 980], ["qwen/qwen3-max", 960], ["qwen/qwen3-coder-plus", 950], ["qwen/qwen3.7-plus", 930], ["qwen/qwen3.6-plus", 910], ["qwen/qwen3.5-plus", 890], ["qwen/qwen3.6-max-preview", 880], ["qwen/qwen3.5-397b-a17b", 870], ["qwen/qwen3.6-35b-a3b", 840], ["qwen/qwen3.6-27b", 820], ["qwen/qwen3-vl-plus", 800], ["qwen/qwen3.5-omni-plus", 780], ["qwen/qwen3.5-omni-flash", 760], ["qwen/qwen3-omni-flash", 740], ["qwen/qwen3.5-flash", 720], ["qwen/qwen-plus-2025-07-28", 700],
+  ["z-ai/glm-5.3", 1000], ["z-ai/glm-5.3-flash", 980], ["z-ai/glm-5.2", 960], ["z-ai/glm-5.1", 940], ["z-ai/glm-5", 920], ["z-ai/glm-5-turbo", 900], ["z-ai/glm-4.7", 850], ["z-ai/glm-4.6", 830], ["z-ai/glm-4.5", 800], ["z-ai/glm-4.5-air", 700],
+ ]);
+
+function providerKey(modelId) {
+  return String(modelId).split("/")[0] || "other";
+}
+
+function providerLabel(modelId) {
+  const key = providerKey(modelId);
+  return PROVIDER_LABELS.get(key) || key.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function modelStrength(modelId, index) {
+  if (MODEL_STRENGTH_OVERRIDES.has(modelId)) return MODEL_STRENGTH_OVERRIDES.get(modelId);
+  const id = String(modelId).toLowerCase();
+  let score = 500 - index / 100;
+  if (id.includes("ultra")) score += 100;
+  if (id.includes("pro")) score += 80;
+  if (id.includes("max")) score += 75;
+  if (id.includes("large")) score += 70;
+  if (id.includes("super")) score += 65;
+  if (id.includes("plus")) score += 55;
+  if (id.includes("coder")) score += 45;
+  if (id.includes("flash") || id.includes("highspeed")) score -= 25;
+  if (id.includes("nano") || id.includes("mini") || id.includes("air")) score -= 75;
+  const billion = id.match(/(\d+)b\b/);
+  if (billion) score += Math.min(80, Number(billion[1]) / 2);
+  return score;
+}
+
+function modelPickerEntries(selected) {
+  const grouped = new Map();
+  MODELS.forEach(([id, label], index) => {
+    const key = providerKey(id);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push({ id, label, index, locked: LOCKED_MODELS.has(id), selected: id === selected });
+  });
+  const providers = [...grouped.keys()].sort((a, b) => providerLabel(a).localeCompare(providerLabel(b)));
+  return providers.flatMap((key) => [
+    { type: "provider", key, label: providerLabel(key) },
+    ...grouped.get(key).sort((a, b) => modelStrength(b.id, b.index) - modelStrength(a.id, a.index) || a.label.localeCompare(b.label)).map((model) => ({ type: "model", ...model })),
+  ]);
+}
+
+function pickerTerminalHeight() {
+  return Math.max(12, Number(output.rows) || 24);
+}
+
+async function selectModelInteractive(selected) {
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") {
+    printModels(selected);
+    return null;
+  }
+
+  const entries = modelPickerEntries(selected);
+  const allModelCount = entries.filter((entry) => entry.type === "model").length;
+  const modelIndices = entries.map((entry, index) => entry.type === "model" && !entry.locked ? index : -1).filter((index) => index >= 0);
+  let activeModel = Math.max(0, modelIndices.findIndex((index) => entries[index].id === selected));
+  let scrollTop = 0;
+  const viewport = Math.max(6, Math.min(18, pickerTerminalHeight() - 10));
+  const selectedModelIndex = () => modelIndices[Math.max(0, Math.min(modelIndices.length - 1, activeModel))];
+  const ensureVisible = () => {
+    const index = selectedModelIndex();
+    if (index < scrollTop) scrollTop = index;
+    if (index >= scrollTop + viewport) scrollTop = index - viewport + 1;
+  };
+  const render = () => {
+    ensureVisible();
+    const width = Math.max(60, terminalWidth());
+    const visible = entries.slice(scrollTop, scrollTop + viewport);
+    const lines = [
+      `  ${color.coral("╭")}${color.coral("─".repeat(width - 4))}${color.coral("╮")}`,
+      `  ${color.coral("│")} ${color.cream("Select model")} ${color.muted(`· ${allModelCount} models · providers A–Z`)}${" ".repeat(Math.max(0, width - 8 - visibleLength(`Select model · ${allModelCount} models · providers A–Z`)))} ${color.coral("│")}`,
+      `  ${color.coral("│")} ${color.muted("↑/↓ or numpad 8/2 browse · PgUp/PgDn jump · Enter default · s session-only · Esc cancel")}${" ".repeat(Math.max(0, width - 5 - visibleLength("↑/↓ or numpad 8/2 browse · PgUp/PgDn jump · Enter default · s session-only · Esc cancel")))} ${color.coral("│")}`,
+      `  ${color.coral("├")}${color.coral("─".repeat(width - 4))}${color.coral("┤")}`,
+    ];
+    for (const [offset, entry] of visible.entries()) {
+      const absoluteIndex = scrollTop + offset;
+      let content;
+      if (entry.type === "provider") {
+        content = `  ${color.coral("◆")} ${color.cream(entry.label)}`;
+      } else {
+        const active = absoluteIndex === selectedModelIndex();
+        const marker = entry.locked ? color.amber("🔒") : active ? color.coral("›") : entry.selected ? color.green("✓") : color.dim("·");
+        const pricing = MODEL_PRICING.get(entry.id);
+        const price = pricing ? ` · $${pricing.input}/$${pricing.output} per 1M` : "";
+        const vision = MODEL_IMAGE_INPUT.has(entry.id) ? " · vision" : "";
+        const unavailable = entry.locked ? " · unavailable" : "";
+        content = `  ${marker} ${active ? color.cream(entry.label) : entry.locked ? color.amber(entry.label) : color.muted(entry.label)} ${color.dim(`(${entry.id})`)}${color.dim(`${price}${vision}${unavailable}`)}`;
+      }
+      const fitted = shorten(content, width - 7);
+      lines.push(`  ${color.coral("│")} ${fitted}${" ".repeat(Math.max(0, width - 7 - visibleLength(fitted)))} ${color.coral("│")}`);
+    }
+    while (lines.length < viewport + 4) lines.push(`  ${color.coral("│")}${" ".repeat(width - 2)}${color.coral("│")}`);
+    const topHint = scrollTop > 0 ? "↑ more above" : "top";
+    const bottomHint = scrollTop + viewport < entries.length ? "↓ more below" : "bottom";
+    lines.push(`  ${color.coral("├")}${color.coral("─".repeat(width - 4))}${color.coral("┤")}`);
+    lines.push(`  ${color.coral("│")} ${color.muted(`${topHint} · ${bottomHint} · ${providerLabel(entries[selectedModelIndex()].id)} · ${entries[selectedModelIndex()].label}`)}${" ".repeat(Math.max(0, width - 7 - visibleLength(`${topHint} · ${bottomHint} · ${providerLabel(entries[selectedModelIndex()].id)} · ${entries[selectedModelIndex()].label}`)))} ${color.coral("│")}`);
+    lines.push(`  ${color.coral("╰")}${color.coral("─".repeat(width - 4))}${color.coral("╯")}`);
+    return lines;
+  };
+
+  emitKeypressEvents(input);
+  const previousRawMode = input.isRaw;
+  input.setRawMode(true);
+  input.resume();
+  let lines = render();
+  output.write(`\u001b[?25l${lines.join("\n")}`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      input.removeListener("keypress", onKeypress);
+      input.setRawMode(Boolean(previousRawMode));
+      output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const redraw = () => {
+      output.write(`\u001b[${lines.length - 1}A`);
+      lines = render();
+      output.write(lines.map((line) => `\u001b[2K\r${line}`).join("\n"));
+    };
+    const move = (delta) => {
+      activeModel = Math.max(0, Math.min(modelIndices.length - 1, activeModel + delta));
+      redraw();
+    };
+    const onKeypress = (str, key = {}) => {
+      const name = String(key.name || "").toLowerCase();
+      const sequence = key.sequence || str || "";
+      const up = name === "up" || name === "k" || name === "8" || sequence === "\u001b[A" || sequence === "\u001bOA";
+      const down = name === "down" || name === "j" || name === "2" || sequence === "\u001b[B" || sequence === "\u001bOB";
+      const pageUp = name === "pageup" || sequence === "\u001b[5~";
+      const pageDown = name === "pagedown" || sequence === "\u001b[6~";
+      const home = name === "home" || sequence === "\u001b[H" || sequence === "\u001b[1~";
+      const end = name === "end" || sequence === "\u001b[F" || sequence === "\u001b[4~";
+      if (key.ctrl && name === "c") { finish(null, new Error("Aborted with Ctrl+C")); return; }
+      if (isEscapeKey(str, key)) { finish(null); return; }
+      if (up) { move(-1); return; }
+      if (down) { move(1); return; }
+      if (pageUp) { move(-viewport); return; }
+      if (pageDown) { move(viewport); return; }
+      if (home) { activeModel = 0; redraw(); return; }
+      if (end) { activeModel = modelIndices.length - 1; redraw(); return; }
+      if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
+        finish({ model: entries[selectedModelIndex()].id, sessionOnly: false });
+        return;
+      }
+      if (name === "s" || str === "s" || str === "S") {
+        finish({ model: entries[selectedModelIndex()].id, sessionOnly: true });
+      }
+    };
+    input.on("keypress", onKeypress);
+  });
+}
+
 function slashCompleter(line) {
   if (!line.startsWith("/")) return [[], line];
   const matches = SLASH_COMMANDS.filter((command) => command.startsWith(line.toLowerCase()));
@@ -1599,8 +1789,15 @@ async function handleSlash(state, line) {
     case "/models": printModels(state.config.selectedModel, argument); return true;
     case "/model": {
       if (!argument) {
-        console.log(`\n${color.cyan("Current model")}  ${modelLabel(state.config.selectedModel)}`);
-        console.log(color.dim("  Use /model <name> to switch, or /models to browse every model."));
+        const choice = await selectModelInteractive(state.config.selectedModel);
+        if (!choice?.model) return true;
+        if (choice.sessionOnly) {
+          state.config = { ...state.config, selectedModel: choice.model };
+          notice(`Using ${color.cream(modelLabel(choice.model))} for this session only.`);
+        } else {
+          state.config = saveConfig({ selectedModel: choice.model });
+          notice(`Default model set to ${color.cream(modelLabel(choice.model))}.`);
+        }
         return true;
       }
       const model = resolveModel(argument);
