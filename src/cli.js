@@ -704,6 +704,62 @@ function printToolResult(name, result, { error = false, streamJson = false } = {
   }
 }
 
+function normalizeCliTodos(rawTodos) {
+  if (!Array.isArray(rawTodos)) return [];
+  return rawTodos
+    .slice(0, 40)
+    .map((todo) => {
+      const content = String(todo?.content ?? todo?.title ?? "").trim();
+      const status = String(todo?.status ?? "pending").trim().toLowerCase();
+      if (!content || !["pending", "in_progress", "completed", "cancelled"].includes(status)) return null;
+      return { content, status };
+    })
+    .filter(Boolean);
+}
+
+function applyCliTodoUpdate(current, rawTodos, mode = "replace") {
+  const next = normalizeCliTodos(rawTodos);
+  if (String(mode).toLowerCase() !== "add") return next;
+  const merged = Array.isArray(current) ? current.map((todo) => ({ ...todo })) : [];
+  for (const todo of next) {
+    const existing = merged.find((item) => item.content === todo.content);
+    if (existing) existing.status = todo.status;
+    else merged.push(todo);
+  }
+  return merged;
+}
+
+function todoStatusGlyph(status) {
+  if (status === "completed") return color.teal("✓");
+  if (status === "in_progress") return color.coral("●");
+  if (status === "cancelled") return color.red("×");
+  return color.muted("○");
+}
+
+function todoSummary(todos) {
+  const total = todos.length;
+  const completed = todos.filter((todo) => todo.status === "completed").length;
+  const active = todos.filter((todo) => todo.status === "in_progress").length;
+  if (!total) return "no tasks";
+  return `${completed}/${total} complete${active ? ` · ${active} in progress` : ""}`;
+}
+
+function printTodoList(todos, { compact = false } = {}) {
+  if (!Array.isArray(todos) || !todos.length) return;
+  const contentWidth = Math.max(24, terminalWidth() - (compact ? 12 : 14));
+  const heading = compact ? "Task plan" : "Task plan · live";
+  console.log(`  ${color.coral("╭─")} ${color.cream(heading)} ${color.dim(`· ${todoSummary(todos)}`)}`);
+  todos.forEach((todo, index) => {
+    const rows = wrapChatText(todo.content, contentWidth);
+    const marker = todoStatusGlyph(todo.status);
+    rows.forEach((row, rowIndex) => {
+      const prefix = rowIndex === 0 ? `${marker} ${index + 1}. ` : "  │   ";
+      console.log(`  ${color.muted("│")} ${prefix}${color.cream(row)}`);
+    });
+  });
+  console.log(`  ${color.muted("╰─")} ${color.dim("updated by TodoWrite")}`);
+}
+
 function outputToolEvent(state, event) {
   if (state.outputFormat !== "stream-json") return;
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -817,6 +873,11 @@ async function runClientTool(state, call) {
   }
   try {
     const result = await executeCliTool(name, args, { cwd: state.cwd, allowOutside: outsidePaths.length > 0 });
+    if (name === "TodoWrite") {
+      state.todos = applyCliTodoUpdate(state.todos, args.todos, args.mode);
+      if (state.outputFormat !== "stream-json") printTodoList(state.todos);
+      outputToolEvent(state, { type: "todo-update", todos: state.todos });
+    }
     printToolResult(name, result, { streamJson: state.outputFormat === "stream-json" });
     return result;
   } catch (error) {
@@ -1118,6 +1179,7 @@ function printSessionFooter(state) {
   const width = Math.max(20, terminalWidth() - 2);
   const lines = [
     color.muted(`  ${"─".repeat(width)}`),
+    ...(state.todos?.length ? [`  ${color.coral("▸")} ${color.cream("Task plan")} ${color.muted(`· ${todoSummary(state.todos)} · /tasks to inspect`)}`] : []),
     `  ${color.muted(`${effort} · /effort`)} ${color.dim("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted("· /model to change")}`,
     `  ${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("· /help for shortcuts")}`,
     `  ${color.muted("·")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}`,
@@ -1891,6 +1953,7 @@ async function handleSlash(state, line) {
       state.threadId = null;
       state.messages = [];
       state.pendingImages = [];
+      state.todos = [];
       state.config = saveConfig({ lastThreadId: null });
       notice("Started a fresh conversation.");
       return true;
@@ -1900,6 +1963,7 @@ async function handleSlash(state, line) {
       const loaded = await loadThread(state.auth, id);
       state.threadId = loaded.thread.id;
       state.messages = loaded.messages;
+      state.todos = [];
       state.config = saveConfig({ lastThreadId: state.threadId });
       notice(`Resumed ${color.cream(loaded.thread.title)} · ${color.muted(state.threadId)}`);
       return true;
@@ -1973,9 +2037,18 @@ async function handleSlash(state, line) {
     case "/plugins":
       await printWorkspaceAutomation("plugins", state.cwd);
       return true;
-    case "/agents":
-    case "/background":
     case "/tasks": {
+      if (state.todos?.length) printTodoList(state.todos, { compact: true });
+      else console.log(color.dim("\nNo active task plan. TodoWrite plans will appear here when the agent starts a multi-step task."));
+      const jobs = backgroundSummary();
+      console.log(`\n${color.coral("Background work")}`);
+      if (!jobs.length) console.log(color.dim("  No local background commands are running."));
+      else for (const job of jobs) console.log(`  ${job.id}  ${job.running ? color.teal("running") : color.muted(job.kind === "agent" ? "finished" : "exited")}  ${job.command}`);
+      console.log(color.dim("  Commands and delegated read-only agents share this activity view."));
+      return true;
+    }
+    case "/agents":
+    case "/background": {
       const jobs = backgroundSummary();
       console.log(`\n${color.coral("Background work")}`);
       if (!jobs.length) console.log(color.dim("  No local background commands are running."));
@@ -2051,9 +2124,10 @@ async function handleSlash(state, line) {
 }
 
 async function interactive(config, auth, configPath, existingState) {
-  const state = existingState || { config, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
+  const state = existingState || { config, auth, configPath, threadId: null, messages: [], pendingImages: [], todos: [], quiet: false };
   state.cwd ||= process.cwd();
   state.outputFormat ||= "text";
+  state.todos ||= [];
   state.interactive = true;
   state.maxTurns ||= state.config.maxTurns || 25;
   state.maxBudget ??= state.config.maxBudget;
@@ -2312,6 +2386,7 @@ async function oneShot(config, auth, options, configPath) {
     threadId: null,
     messages: [],
     pendingImages: images,
+    todos: [],
     quiet: Boolean(options.print),
     outputFormat: options.outputFormat,
     maxTurns: options.maxTurns || config.maxTurns || 25,
