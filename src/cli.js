@@ -573,6 +573,12 @@ async function login(config, auth, useGoogle = false, useQr = false) {
   }
 }
 
+async function ensureSignedIn(config, auth, useGoogle = false, useQr = false) {
+  if (await auth.accessToken()) return;
+  console.log(color.cyan("You are not signed in. Sign in to Nexara to continue."));
+  await login(config, auth, useGoogle, useQr);
+}
+
 async function ensureThread(state) {
   if (state.threadId) return;
   const thread = await createThread(state.auth);
@@ -966,10 +972,11 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === "whoami" && options.prompt.length === 1) { const user = await auth.user(); console.log(user?.email || "Not signed in."); return; }
   if (options.print || options.prompt.length > 0 || options.images.length > 0 || (options.continue && options.prompt.length > 0)) {
+    await ensureSignedIn(nextConfig, auth, options.google, options.qr);
     await oneShot(nextConfig, auth, { ...options, prompt: options.prompt[0] === "login" ? [] : options.prompt }, configPath);
     return;
   }
-  await requireLogin(auth, nextConfig);
+  await ensureSignedIn(nextConfig, auth, options.google, options.qr);
   if (options.continue) {
     const state = { config: nextConfig, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
     const id = nextConfig.lastThreadId;
