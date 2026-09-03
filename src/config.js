@@ -14,6 +14,12 @@ const DEFAULT_CONFIG = {
   supabaseKey: SUPABASE_PUBLISHABLE_KEY,
   selectedModel: DEFAULT_MODEL,
   selectedReasoningEffort: "medium",
+  permissionMode: "ask",
+  noSessionPersistence: false,
+  maxTurns: 25,
+  maxBudget: null,
+  allowedTools: [],
+  disallowedTools: [],
   lastThreadId: null,
   session: null,
   /** Silent background updates. Opt out with `nexara update --off` (or
@@ -29,7 +35,12 @@ export function loadConfig() {
   } catch {
     // First run or a partially deleted config: start from safe defaults.
   }
-  return { ...DEFAULT_CONFIG, ...parsed };
+  const merged = { ...DEFAULT_CONFIG, ...parsed };
+  // The first CLI release used MiniMax M2.5 as its implicit default. Migrate
+  // only that untouched legacy default; an explicitly chosen model remains
+  // exactly as the user set it.
+  if (merged.selectedModel === "minimax/minimax-m2.5") merged.selectedModel = DEFAULT_CONFIG.selectedModel;
+  return merged;
 }
 
 export function saveConfig(patch) {

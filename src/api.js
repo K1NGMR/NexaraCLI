@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 
+import { CLI_CLIENT_TOOL_NAMES } from "./tools.js";
+
 function id() {
   return crypto.randomUUID();
 }
@@ -107,7 +109,7 @@ export async function loadThread(auth, threadId) {
   };
 }
 
-function consumeDataLine(raw, state, onStatus, onText) {
+function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult, onSource, onFinish) {
   const line = raw.trim();
   if (!line || line.startsWith(":")) return;
   const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
@@ -130,7 +132,11 @@ function consumeDataLine(raw, state, onStatus, onText) {
     return;
   }
 
-  if (event.type === "text-delta" || event.type === "text" || event.type === "textDelta") {
+  const metadata = event.metadata || event.messageMetadata || {};
+  if (event.type === "start") {
+    if (metadata.model) state.model = metadata.model;
+    onStatus?.("waiting");
+  } else if (event.type === "text-delta" || event.type === "text" || event.type === "textDelta") {
     const delta = event.delta ?? event.text ?? event.value ?? "";
     if (delta) {
       state.text += delta;
@@ -138,14 +144,46 @@ function consumeDataLine(raw, state, onStatus, onText) {
     }
   } else if (event.type === "reasoning-delta" || event.type === "reasoning") {
     onStatus?.("thinking");
-  } else if (event.type === "tool-input-start" || event.type === "tool-input-available") {
-    onStatus?.("using a tool");
+  } else if (event.type === "tool-input-start") {
+    onStatus?.(`tool:${event.toolName || "tool"}`);
+  } else if (event.type === "tool-input-available") {
+    const name = String(event.toolName || "");
+    onStatus?.(`tool:${name || "tool"}`);
+    if (CLI_CLIENT_TOOL_NAMES.has(name) && !state.nativeCall) {
+      state.nativeCall = {
+        name,
+        arguments: event.input && typeof event.input === "object" ? event.input : {},
+        toolCallId: event.toolCallId || null,
+      };
+      onToolCall?.(state.nativeCall);
+    }
+  } else if (event.type === "tool-output-available") {
+    onToolResult?.({
+      name: event.toolName || "tool",
+      toolCallId: event.toolCallId || null,
+      output: event.output,
+    });
+  } else if (event.type === "source-url" || event.type === "source-document") {
+    const source = event.url || event.source?.url || event.source;
+    if (source) {
+      state.sources.push(source);
+      onSource?.(source);
+    }
+  } else if (event.type === "finish") {
+    if (metadata.model) state.model = metadata.model;
+    onFinish?.(event);
+    if (metadata.usage) {
+      const usage = metadata.usage;
+      const input = Number(usage.inputTokens) || 0;
+      const output = Number(usage.outputTokens) || 0;
+      if (input + output > 0) state.lastUsage = { inputTokens: input, outputTokens: output };
+    }
   } else if (event.type === "error" || event.type === "finish-error") {
     throw new Error(event.errorText || event.error || "The Nexara stream failed.");
-  } else if (event.metadata?.usage && event.type) {
+  } else if (metadata.usage && event.type) {
     // The finish chunk carries the provider's REAL token counts (the same
     // numbers billing uses). Stash them so /status shows exact context.
-    const usage = event.metadata.usage;
+    const usage = metadata.usage;
     const input = Number(usage.inputTokens) || 0;
     const output = Number(usage.outputTokens) || 0;
     if (input + output > 0) state.lastUsage = { inputTokens: input, outputTokens: output };
@@ -163,6 +201,11 @@ export async function sendChat({
   goal,
   onStatus,
   onText,
+  onToolCall,
+  onToolResult,
+  onSource,
+  onFinish,
+  signal,
   quiet = false,
 }) {
   const token = await auth.accessToken();
@@ -181,11 +224,11 @@ export async function sendChat({
       Accept: "text/event-stream",
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
-      // The CLI streams raw SSE and cannot answer the interactive
-      // ask_question tool — the server skips it so the model proceeds with
-      // sensible defaults instead of pausing the stream forever.
+      // The CLI advertises itself as an agent so the server sends its compact
+      // local tool set. ask_question is answered by the terminal loop below.
       "x-nexara-agent": "cli",
     },
+    signal,
     body: JSON.stringify(body),
   });
   if (!response.ok) throw await responseError(response);
@@ -197,7 +240,7 @@ export async function sendChat({
   const compacted = response.headers.get("x-nexara-compacted") === "1";
   const summary = compacted ? decodeURIComponent(response.headers.get("x-nexara-summary") || "") : null;
 
-  const state = { text: "" };
+  const state = { text: "", nativeCall: null, lastUsage: null, sources: [], model: null };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const writeText = onText ?? ((text) => process.stdout.write(text));
@@ -208,10 +251,10 @@ export async function sendChat({
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
     const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() || "";
-    for (const line of lines) consumeDataLine(line, state, onStatus, writeText);
+    for (const line of lines) consumeDataLine(line, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish);
     if (done) break;
   }
-  if (buffer) consumeDataLine(buffer, state, onStatus, writeText);
+  if (buffer) consumeDataLine(buffer, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish);
   if (!quiet) process.stdout.write("\n");
 
   return {
@@ -223,6 +266,9 @@ export async function sendChat({
     summary,
     // Real provider usage for this turn (null when the stream carried none).
     usage: state.lastUsage ?? null,
+    nativeCall: state.nativeCall,
+    sources: state.sources,
+    model: state.model,
   };
 }
 

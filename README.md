@@ -135,9 +135,41 @@ Interactive slash commands:
 - `/threads` — list recent saved threads
 - `/clear` — clear the local context and begin a new thread
 - `/compact` — keep a compact local tail of the current context
+- `/permissions [mode]` — choose `ask`, `read-only`, `plan`, `allow-edits`, `allow-commands`, `auto`, or `full`
+- `/tools` — inspect the local tool surface available to the agent
+- `/mcp`, `/skills`, `/plugins` — inspect workspace automation manifests
+- `/agents`, `/background`, `/tasks`, `/logs <id>`, `/stop <id>` — monitor or control local background work
+- `/download`, `/open <path>`, `/reveal <path>` — find and open generated artifacts
 - `/config` — show the non-secret CLI config location
 - `/status` — show session, thread, and model status
 - `/quit` or `/exit` — leave the session
+
+The agent can use a bidirectional local tool protocol. It shows the call before
+running it, asks for approval for changes, returns the result to the model, and
+continues the turn. The built-in surface includes file reads/writes and patches,
+search/glob, allowlisted local commands, git inspection, background commands,
+artifact opening, code navigation (`SymbolSearch`, `FindReferences`,
+`LocateDefinition`, `CodeOutline`, `ImportGraph`, `DependencyTree`), type-check
+diagnostics, and delegated read-only subagents. Local execution is confined to
+the current workspace by default.
+
+For scripts and CI, use the same controls without opening the REPL:
+
+```text
+nexara -p "Review this project" --output-format json
+nexara -p "Run the tests and fix the failure" --permission-mode allow-edits --max-turns 12
+nexara -p "Inspect the build" --output-format stream-json --max-budget 0.50
+nexara -p "Read-only audit" --allowed-tools Read,Search,Glob --disallowed-tools Bash
+nexara -p "One-off task" --no-session-persistence
+```
+
+`--output-format stream-json` emits status/progress, text-delta, tool-call,
+tool-result, approval-request, question, artifact, finish, and
+cancellation/limit events for automation.
+Press Ctrl+C once to cancel an active generation; press Escape twice to exit
+the CLI entirely.
+The CLI exits cleanly when Escape is pressed twice, including during sign-in or
+workspace trust selection.
 
 ## Voice input (push-to-talk)
 

@@ -69,6 +69,7 @@ export async function startMicRecording({ onStatus = () => {}, onError = () => {
   let child = null;
   let mode = null;
   let ffmpegInput = null;
+  let processError = null;
 
   async function startPowershell() {
     await fs.writeFile(stopFile, "");
@@ -94,7 +95,15 @@ export async function startMicRecording({ onStatus = () => {}, onError = () => {
     child.stdout.on("data", (chunk) => {
       if (/RECORDING/.test(chunk.toString())) onStatus("recording");
     });
-    child.stderr.on("data", (chunk) => process.stderr.write(chunk.toString()));
+    // PowerShell writes the full script location and stack trace for an
+    // AccessDenied microphone result. Keep that implementation detail out of
+    // the prompt and convert it to one useful, actionable message on stop.
+    child.stderr.on("data", (chunk) => {
+      processError = chunk.toString();
+    });
+    child.once("error", (error) => {
+      processError = error instanceof Error ? error.message : String(error);
+    });
     mode = "powershell";
   }
 
@@ -154,6 +163,16 @@ export async function startMicRecording({ onStatus = () => {}, onError = () => {
         await waitExit(child, 5000);
       }
       child = null;
+      if (processError) {
+        const denied = /accessdenied|permission|microphone/i.test(processError);
+        const message = denied
+          ? "Microphone access was denied. Enable microphone access for desktop apps in Windows Settings → Privacy & security → Microphone, then press M again."
+          : "The microphone recorder stopped before it captured audio. Check your microphone and try again.";
+        processError = null;
+        onError(message);
+        await fs.rm(outFile, { force: true }).catch(() => {});
+        return null;
+      }
       try {
         await fs.rm(stopFile, { force: true });
       } catch {
