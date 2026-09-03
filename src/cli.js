@@ -417,62 +417,135 @@ const color = {
   magenta: rgb(204, 120, 92),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
-const PETAL_FRAMES = [
+// Pixel-art frames for the Nexara Petal. Each character is one terminal pixel;
+// the renderer below paints it as a pair of true-colour spaces so the mascot
+// remains crisp in Windows Terminal and other ANSI-capable terminals.
+const PETAL_PIXEL_FRAMES = [
   [
-    "       ·✦·       ",
-    "     ╱╲ ╱╲       ",
-    "  ◢██◤ ◥██◣     ",
-    " ◥██◣  ✧  ◢██◤  ",
-    "   ◥███◣███◤     ",
-    "      ◥◤         ",
+    "......M......",
+    ".....MMM.....",
+    "....MPPPM....",
+    ".BBMPPPPPMBB.",
+    "BBPPPPWPPPPBB",
+    ".BBPPWWWPPBB.",
+    "..BPPWWWPPB..",
+    "...BPPPPPB...",
+    "....BBBBB....",
+    ".....BBB.....",
+    "......B......",
   ],
   [
-    "        ✦        ",
-    "      ╱╲         ",
-    "  ◢██◤  ◥██◣     ",
-    " ◥██◣  ✧  ◢██◤  ",
-    "   ◥███████◤     ",
-    "       ◥◤        ",
+    ".....MMM.....",
+    "....MPPPM....",
+    "...MPVVVPM...",
+    ".BBPPVVVVPPBB",
+    "BBPPPVWVVPPBB",
+    ".BBPPWWWPPBB.",
+    "..BPPWWWPPB..",
+    "...BPPPPPB...",
+    "....BBBBB....",
+    ".....BBB.....",
+    "......B......",
   ],
   [
-    "      ·✦·        ",
-    "       ╲╱        ",
-    " ◢██◣     ◢██◣  ",
-    "◥██◤  ◉ ◉  ◥██◤ ",
-    "  ◥███ ᴗ ███◤    ",
-    "       ◥◤        ",
+    "......M......",
+    ".....MPM.....",
+    "....MPPPM....",
+    ".BBMPPPPPMBB.",
+    "BBPPPPWWWPPBB",
+    ".BBPPWWWWPBB.",
+    "..BPPWWWPPB..",
+    "...BPPPPPB...",
+    "....BBBBB....",
+    ".....BBB.....",
+    "......B......",
   ],
   [
-    "       ✦         ",
-    "     ╱╲ ╱╲       ",
-    "  ◢██◤ ◥██◣     ",
-    " ◥██◣  ◉  ◢██◤  ",
-    "   ◥███ᴗ███◤     ",
-    "      ◥◤         ",
+    "......M......",
+    ".....MMM.....",
+    "....MPPPM....",
+    "..BBMPPPPMBB.",
+    "BBPPPPWPPPPBB",
+    "..BBPWWWPPBB.",
+    "...BPPWWWPPB.",
+    "....BPPPPPB..",
+    ".....BBBBB...",
+    "......BBB....",
+    ".......B.....",
   ],
   [
-    "      ·✦·        ",
-    "       ╲╱        ",
-    " ◢██◣     ◢██◣  ",
-    "◥██◤  ◉ ◉  ◥██◤ ",
-    "  ◥███ ᴗ ███◤    ",
-    "        ·         ",
+    "......M......",
+    ".....MMM.....",
+    "....MPPPM....",
+    ".BBMPPPPPMBB.",
+    "BBPPPPWWPPPPB",
+    ".BBPPWWWWPBB.",
+    "..BPPWWWPPB..",
+    "...BPPPPPB...",
+    "....BBBBB....",
+    ".....BBB.....",
+    "......B......",
   ],
   [
-    "        ✦        ",
-    "      ╱╲         ",
-    "  ◢██◤  ◥██◣     ",
-    " ◥██◣  ✧  ◢██◤  ",
-    "   ◥███████◤     ",
-    "       ◥◤        ",
+    ".....MMM.....",
+    "....MPPPM....",
+    "...MPVVVPM...",
+    ".BBPPVVVVPPBB",
+    "BBPPPVWVVPPBB",
+    ".BBPPWWWPPBB.",
+    "..BPPWWWPPB..",
+    "...BPPPPPB...",
+    "....BBBBB....",
+    ".....BBB.....",
+    "......B......",
+  ],
+  [
+    "......M......",
+    ".....MMM.....",
+    "....MPPPM....",
+    ".BBMPPPPPMBB.",
+    "BBPPPPWPPPPBB",
+    ".BBPPWWWPPBB.",
+    "..BPPWWWPPB..",
+    "...BPPPPPB...",
+    "....BBBBB....",
+    ".....BBB.....",
+    "......B......",
+  ],
+  [
+    "......M......",
+    ".....MPM.....",
+    "....MPPPM....",
+    ".BBMPPPPPMBB.",
+    "BBPPPPWWPPPPB",
+    ".BBPPWWWWPBB.",
+    "..BPPWWWPPB..",
+    "...BPPPPPB...",
+    "....BBBBB....",
+    ".....BBB.....",
+    "......B......",
   ],
 ];
+
+const PIXEL_COLORS = {
+  B: [54, 108, 232],
+  P: [115, 67, 224],
+  V: [181, 55, 235],
+  M: [235, 101, 213],
+  W: [250, 249, 245],
+};
+
+const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
+
+function pixelCell(value) {
+  const rgbValue = PIXEL_COLORS[value];
+  if (!rgbValue) return "  ";
+  return `\u001b[48;2;${rgbValue[0]};${rgbValue[1]};${rgbValue[2]}m  \u001b[0m`;
+}
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
 }
-
-const ACTIVITY_FRAMES = ["·", "✦", "✧", "⋆"];
 
 function activityText(status) {
   if (String(status).startsWith("tool:")) return `Using ${String(status).slice(5)}…`;
@@ -498,7 +571,9 @@ function createActivityLine({ quiet = false, streamJson = false } = {}) {
     if (quiet || streamJson || !output.isTTY) return;
     visible = true;
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
-    output.write(`\r\u001b[2K  ${color.coral(ACTIVITY_FRAMES[frame % ACTIVITY_FRAMES.length])} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`);
+    const glyph = ACTIVITY_FRAMES[frame % ACTIVITY_FRAMES.length];
+    const paint = [color.coral, color.violet, color.pink, color.teal][frame % 4];
+    output.write(`\r\u001b[2K  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`);
   };
   if (!quiet && !streamJson && output.isTTY) {
     timer = setInterval(() => {
@@ -590,6 +665,13 @@ function visibleLength(text) {
 function terminalWidth() {
   const columns = Number(output.columns) || 80;
   return Math.max(64, Math.min(columns - 2, 140));
+}
+
+function clearTerminalForSession() {
+  if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_CLEAR === "1") return;
+  // Clear the visible viewport and scrollback so every Nexara session starts
+  // as a clean workspace, while leaving the user's shell available on exit.
+  output.write("\u001b[3J\u001b[2J\u001b[H");
 }
 
 function shorten(text, width) {
@@ -802,14 +884,15 @@ async function saveServerArtifact(state, name, output) {
   return filePath;
 }
 
-function petalLine(line, frame) {
-  const painted = frame % 3 === 0 ? color.violet(line) : frame % 3 === 1 ? color.coral(line) : color.pink(line);
-  return `  ${painted}`;
-}
-
-function mascotFrame(frameIndex, label = "") {
-  const frame = PETAL_FRAMES[frameIndex % PETAL_FRAMES.length];
-  return [...frame.map((line) => petalLine(line, frameIndex)), label ? `  ${color.muted(label)}` : ""];
+function mascotPixelLines(frameIndex, label = "") {
+  const frame = PETAL_PIXEL_FRAMES[frameIndex % PETAL_PIXEL_FRAMES.length];
+  const width = Math.max(...frame.map((line) => line.length));
+  const lines = frame.map((line) => {
+    const padded = line.padStart(Math.floor((width + line.length) / 2), ".").padEnd(width, ".");
+    return `  ${[...padded].map(pixelCell).join("")}`;
+  });
+  if (label) lines.push(`  ${color.muted(label)}`);
+  return lines;
 }
 
 function pause(milliseconds) {
@@ -820,16 +903,16 @@ async function animateMascot(label = "Waking up your workspace") {
   if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ANIMATION === "1") {
     return;
   }
-  const frameLines = mascotFrame(0, label);
+  const frameLines = mascotPixelLines(0, label);
   output.write("\u001b[?25l");
-  for (let index = 0; index < 9; index += 1) {
+  for (let index = 0; index < PETAL_PIXEL_FRAMES.length * 2; index += 1) {
     if (index > 0) output.write(`\u001b[${frameLines.length - 1}A`);
-    const lines = mascotFrame(index, label);
-    output.write(lines.map((line) => `\u001b[2K${line}`).join("\n"));
-    await pause(85);
+    const lines = mascotPixelLines(index, label);
+    output.write(lines.map((line) => `\u001b[2K\r${line}`).join("\n"));
+    await pause(95);
   }
   output.write(`\u001b[${frameLines.length - 1}A`);
-  output.write(frameLines.map(() => "\u001b[2K").join("\n"));
+  output.write(frameLines.map(() => "\u001b[2K\r").join("\n"));
   output.write("\u001b[?25h\n");
 }
 
@@ -1983,6 +2066,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === "whoami" && options.prompt.length === 1) { const user = await auth.user(); console.log(user?.email || "Not signed in."); return; }
   const startsInteractive = !(options.print || options.prompt.length > 0 || options.images.length > 0 || (options.continue && options.prompt.length > 0));
+  if (startsInteractive || (command === "login" && options.prompt.length === 1)) clearTerminalForSession();
   if (startsInteractive) await animateMascot();
   if (!startsInteractive) {
     await ensureSignedIn(nextConfig, auth, options.google, options.qr);
