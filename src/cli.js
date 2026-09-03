@@ -861,11 +861,6 @@ async function printBanner(config, user = null) {
   console.log(`  ${color.muted("Your Nexara threads stay available across the web, desktop, and mobile app.")}`);
   console.log(`  ${color.muted("Use /resume to continue a saved thread · /threads to browse recent work.")}`);
   console.log();
-  console.log(color.muted(`  ${"─".repeat(Math.max(20, terminalWidth() - 2))}`));
-  console.log(`  ${color.muted(`${effort} · /effort`)} `);
-  console.log(color.muted(`  ${"─".repeat(Math.max(20, terminalWidth() - 2))}`));
-  console.log(`  ${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("(/model to change)")} ${color.dim("· /help for shortcuts")}`);
-  console.log();
 }
 
 function printLoginScreen() {
@@ -1017,7 +1012,17 @@ function printSessionFooter(state) {
   const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
   const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
   const thread = state.threadId ? `thread ${state.threadId.slice(0, 8)}` : "new thread";
-  process.stdout.write(`\n  ${color.muted("·")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}\n\n`);
+  const effort = REASONING_EFFORT_LABELS[state.config.selectedReasoningEffort] || state.config.selectedReasoningEffort;
+  const width = Math.max(20, terminalWidth() - 2);
+  const lines = [
+    color.muted(`  ${"─".repeat(width)}`),
+    `  ${color.muted(`${effort} · /effort`)} ${color.dim("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted("· /model to change")}`,
+    `  ${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("· /help for shortcuts")}`,
+    `  ${color.muted("·")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}`,
+    color.muted(`  ${"─".repeat(width)}`),
+  ];
+  process.stdout.write(`\n${lines.join("\n")}\n`);
+  return lines.length;
 }
 
 function modelLabel(id) {
@@ -1480,7 +1485,10 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
     state.messages = conversation;
   }
   state.pendingImages = [];
-  if (!quiet) printSessionFooter(state);
+  // The interactive REPL owns the transient footer. Keeping it out of the
+  // turn renderer means the transcript can remain one continuous top-to-
+  // bottom conversation instead of starting a new block below /effort.
+  if (!quiet && !state.interactive) printSessionFooter(state);
   if (state.outputFormat === "json") {
     process.stdout.write(`${JSON.stringify({ text: lastAssistant.text, model: lastAssistant.model || state.config.selectedModel, usage: lastAssistant.usage, threadId: state.threadId })}\n`);
   }
@@ -1715,6 +1723,7 @@ async function interactive(config, auth, configPath, existingState) {
   const state = existingState || { config, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
   state.cwd ||= process.cwd();
   state.outputFormat ||= "text";
+  state.interactive = true;
   state.maxTurns ||= state.config.maxTurns || 25;
   state.maxBudget ??= state.config.maxBudget;
   state.spentCredits ||= 0;
@@ -1738,6 +1747,23 @@ async function interactive(config, auth, configPath, existingState) {
   // rl.write() re-emits keypress events for every character it inserts, so
   // ignore 'M' for a beat after appending a transcript.
   const ignoreKeypressUntil = { current: 0 };
+
+  // The status strip is a composer footer, not part of the conversation.
+  // Keep its height so a submitted line can remove it before the next turn
+  // is committed, leaving the transcript growing down from the top.
+  let composerFooterLines = 0;
+
+  function clearComposerFooter() {
+    if (!composerFooterLines || !output.isTTY) return;
+    // After readline accepts a line, the cursor is one row below the prompt.
+    // Move to the top of the footer and erase through the old prompt.
+    output.write(`\u001b[${composerFooterLines + 1}A\u001b[J`);
+    composerFooterLines = 0;
+  }
+
+  function renderComposerFooter() {
+    composerFooterLines = printSessionFooter(state);
+  }
 
   async function transcribeVoice() {
     const recorder = mic;
@@ -1814,17 +1840,25 @@ async function interactive(config, auth, configPath, existingState) {
   try {
     for await (const raw of rl) {
       const line = raw.trim();
-      if (!line) { rl.prompt(); continue; }
+      if (!line) {
+        clearComposerFooter();
+        if (composerFooterLines === 0 && state.messages.length) renderComposerFooter();
+        rl.prompt();
+        continue;
+      }
+      clearComposerFooter();
+      let keepGoing = true;
       try {
         if (line.startsWith("/")) {
-          const keepGoing = await handleSlash(state, line);
-          if (!keepGoing) break;
+          keepGoing = await handleSlash(state, line);
         } else {
           await runPrompt(state, line, { files: state.pendingImages });
         }
       } catch (error) {
         console.log(color.red(error instanceof Error ? error.message : String(error)));
       }
+      if (!keepGoing) break;
+      renderComposerFooter();
       rl.prompt();
     }
   } finally {
