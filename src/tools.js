@@ -186,14 +186,15 @@ export function isMutatingTool(name) {
 
 export function permissionModeLabel(mode) {
   return ({
-    ask: "Ask before changes",
+    ask: "Always ask",
     "read-only": "Read-only",
     plan: "Plan mode",
     "allow-edits": "Edits allowed",
     "allow-commands": "Commands allowed",
-    auto: "Auto mode",
+    auto: "Approve for me",
+    sandboxed: "Sandboxed",
     full: "Full access",
-  })[mode] || "Ask before changes";
+  })[mode] || "Always ask";
 }
 
 export function toolAllowedByMode(name, mode = "ask") {
@@ -203,6 +204,7 @@ export function toolAllowedByMode(name, mode = "ask") {
   if (mode === "allow-edits") return EDIT_TOOLS.has(toolName);
   if (mode === "allow-commands") return EDIT_TOOLS.has(toolName) || COMMAND_TOOLS.has(toolName);
   if (mode === "auto") return !new Set(["Delete", "KillProcess", "GitCommit", "GitCheckout", "GitStash", "OpenExternal", "OpenFile"]).has(toolName);
+  if (mode === "sandboxed") return true;
   return mode === "full";
 }
 
@@ -282,6 +284,21 @@ export function toolPaths(name, args = {}, cwd = process.cwd()) {
       add(firstArg(args, "archive_path", "path"));
       add(firstArg(args, "destination"));
       break;
+    case "Bash":
+    case "RunInBackground": {
+      // Shell commands can hide paths in arguments (for example, `cd ..` or
+      // `python C:\\other-project\\server.py`). Surface those paths to the
+      // same approval gate used by file tools.
+      const command = firstArg(args, "command", "cmd", "script");
+      for (const token of tokenizeCommand(command)) {
+        const candidate = token.includes("=") ? token.slice(token.indexOf("=") + 1) : token;
+        const looksLikePath = path.isAbsolute(candidate)
+          || path.win32.isAbsolute(candidate)
+          || candidate.split(/[\\/]/).includes("..");
+        if (looksLikePath) add(candidate);
+      }
+      break;
+    }
     default:
       break;
   }
@@ -449,11 +466,18 @@ function commandName(command) {
   return path.basename(command).toLowerCase().replace(/\.cmd$|\.exe$|\.bat$/i, "");
 }
 
-async function runCommand(command, cwd, { background = false } = {}) {
+async function runCommand(command, cwd, { background = false, allowOutside = false } = {}) {
   const tokens = tokenizeCommand(command);
+  const outsidePaths = toolPaths("Bash", { command }, cwd);
+  if (outsidePaths.length && !allowOutside) {
+    const error = new Error(`Command references a path outside the workspace: ${outsidePaths.join(", ")}`);
+    error.code = "OUTSIDE_WORKSPACE";
+    error.path = outsidePaths[0];
+    throw error;
+  }
   const name = commandName(tokens[0]);
   if (!ALLOWED_COMMANDS.has(name)) {
-    throw new Error(`Command blocked by the Nexara CLI safety policy: ${name}. Use /permissions full only when you understand the risk.`);
+    throw new Error(`Command blocked by the Nexara CLI safety policy: ${name}. Use /permission full only when you understand the risk.`);
   }
   const executable = process.platform === "win32" ? WINDOWS_COMMAND_ALIASES.get(name) || tokens[0] : tokens[0];
   if (background) {
@@ -833,11 +857,11 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       return (await workspaceIntegrationEntries(kind, cwd)).join("\n") || `No workspace ${kind} configuration found.`;
     }
     case "Bash": {
-      const result = await runCommand(firstArg(args, "command", "cmd", "script"), cwd);
+      const result = await runCommand(firstArg(args, "command", "cmd", "script"), cwd, { allowOutside });
       return `$ ${firstArg(args, "command", "cmd", "script")}\n${truncate(`${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`)}\n(exit ${result.exitCode})`;
     }
     case "RunInBackground": {
-      const result = await runCommand(firstArg(args, "command", "cmd", "script"), cwd, { background: true });
+      const result = await runCommand(firstArg(args, "command", "cmd", "script"), cwd, { background: true, allowOutside });
       return `Started background command ${result.id} (pid ${result.pid ?? "?"}): ${result.command}`;
     }
     case "BackgroundOutput": {

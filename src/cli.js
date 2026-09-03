@@ -388,7 +388,7 @@ const MODEL_ALIASES = new Map([
 const SLASH_COMMANDS = [
   "/help", "/model", "/models", "/effort", "/attach", "/image", "/think", "/research",
   "/perplexity", "/plan", "/honest", "/goal", "/new", "/resume", "/threads", "/clear",
-  "/compact", "/config", "/permissions", "/tools", "/mcp", "/skills", "/plugins", "/agents", "/background", "/tasks", "/logs",
+  "/compact", "/config", "/permission", "/permissions", "/tools", "/mcp", "/skills", "/plugins", "/agents", "/background", "/tasks", "/logs",
   "/stop", "/download", "/open", "/reveal", "/login", "/update", "/status", "/quit", "/exit",
 ];
 
@@ -411,7 +411,8 @@ const SLASH_COMMAND_DESCRIPTIONS = new Map([
   ["/clear", "Clear local context and start a fresh thread."],
   ["/compact", "Summarize the conversation to free context space."],
   ["/config", "Show the local Nexara configuration path."],
-  ["/permissions", "Choose read-only, plan, edits, commands, auto, or full access."],
+  ["/permission", "Choose Always ask, Approve for me, Sandboxed, or Full access."],
+  ["/permissions", "Alias for /permission."],
   ["/tools", "Show the tools available to the CLI agent."],
   ["/mcp", "Show MCP configuration and connected server hints."],
   ["/skills", "Show workspace skills available to the CLI agent."],
@@ -862,7 +863,9 @@ async function runClientTool(state, call) {
     return message;
   }
   const outsidePaths = toolPaths(name, args, state.cwd).filter((value) => value);
-  const outsideApprovalRequired = outsidePaths.length > 0 && !state.allowOutsidePaths;
+  const outsideApprovalRequired = outsidePaths.length > 0
+    && effectivePermissionMode(state) !== "full"
+    && !state.allowOutsidePaths;
   if (decision.action === "ask" || outsideApprovalRequired) {
     const approved = await requestToolApproval(state, name, args, { outsidePaths });
     if (!approved) {
@@ -870,7 +873,7 @@ async function runClientTool(state, call) {
       printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
       return message;
     }
-    if (outsideApprovalRequired) state.allowOutsidePaths = true;
+    if (outsideApprovalRequired && effectivePermissionMode(state) !== "sandboxed") state.allowOutsidePaths = true;
   }
   try {
     const result = await executeCliTool(name, args, { cwd: state.cwd, allowOutside: outsidePaths.length > 0 });
@@ -1396,6 +1399,126 @@ function pickerTerminalHeight() {
   return Math.max(12, Number(output.rows) || 24);
 }
 
+const PERMISSION_OPTIONS = [
+  {
+    mode: "ask",
+    label: "Always ask",
+    description: "Ask before every file change, command, or other action.",
+  },
+  {
+    mode: "auto",
+    label: "Approve for me",
+    description: "Allow safe edits and commands automatically; ask before destructive actions.",
+  },
+  {
+    mode: "sandboxed",
+    label: "Sandboxed",
+    description: "Full access inside this project, including Bash and local servers; ask outside it.",
+  },
+  {
+    mode: "full",
+    label: "Full access",
+    description: "Allow file access, edits, and commands everywhere without approval prompts.",
+  },
+];
+
+async function selectPermissionInteractive(currentMode, cwd = process.cwd()) {
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") {
+    console.log(`Permission mode: ${color.cream(permissionModeLabel(currentMode))}`);
+    PERMISSION_OPTIONS.forEach((option, index) => console.log(`  ${index + 1}. ${option.label} — ${option.description}`));
+    return null;
+  }
+
+  let selected = Math.max(0, PERMISSION_OPTIONS.findIndex((option) => option.mode === currentMode));
+  let scrollTop = 0;
+  const viewport = Math.max(4, Math.min(8, pickerTerminalHeight() - 10));
+  const ensureVisible = () => {
+    if (selected < scrollTop) scrollTop = selected;
+    if (selected >= scrollTop + viewport) scrollTop = selected - viewport + 1;
+  };
+  const render = () => {
+    ensureVisible();
+    const width = Math.max(64, terminalWidth());
+    const visible = PERMISSION_OPTIONS.slice(scrollTop, scrollTop + viewport);
+    const project = shorten(cwd, Math.max(28, width - 42));
+    const title = `Permission mode · project sandbox: ${project}`;
+    const hint = "↑/↓ or numpad 8/2 browse · Enter select · Esc cancel";
+    const lines = [
+      `  ${color.coral("╭")}${color.coral("─".repeat(width - 4))}${color.coral("╮")}`,
+      `  ${color.coral("│")} ${color.cream("Select permission mode")} ${color.muted(`· ${title.split(" · ").slice(1).join(" · ")}`)}${" ".repeat(Math.max(0, width - 8 - visibleLength(title)))} ${color.coral("│")}`,
+      `  ${color.coral("│")} ${color.muted(hint)}${" ".repeat(Math.max(0, width - 7 - visibleLength(hint)))} ${color.coral("│")}`,
+      `  ${color.coral("├")}${color.coral("─".repeat(width - 4))}${color.coral("┤")}`,
+    ];
+    for (const [offset, option] of visible.entries()) {
+      const absoluteIndex = scrollTop + offset;
+      const active = absoluteIndex === selected;
+      const marker = active ? color.coral("›") : option.mode === currentMode ? color.green("✓") : color.dim("·");
+      const label = active ? color.cream(option.label) : color.muted(option.label);
+      lines.push(`  ${color.coral("│")}   ${marker} ${label} ${color.dim(`(${option.mode})`)}`);
+      const description = active ? color.muted(`     ${option.description}`) : color.dim(`     ${option.description}`);
+      lines.push(`  ${color.coral("│")} ${shorten(description, width - 7)}${" ".repeat(Math.max(0, width - 7 - visibleLength(shorten(description, width - 7))))} ${color.coral("│")}`);
+    }
+    while (lines.length < viewport * 2 + 4) lines.push(`  ${color.coral("│")}${" ".repeat(width - 2)}${color.coral("│")}`);
+    const activeOption = PERMISSION_OPTIONS[selected];
+    const footer = `Current: ${activeOption.label} · ${scrollTop > 0 ? "↑ more above · " : ""}${scrollTop + viewport < PERMISSION_OPTIONS.length ? "↓ more below" : "ready"}`;
+    lines.push(`  ${color.coral("├")}${color.coral("─".repeat(width - 4))}${color.coral("┤")}`);
+    lines.push(`  ${color.coral("│")} ${color.muted(footer)}${" ".repeat(Math.max(0, width - 7 - visibleLength(footer)))} ${color.coral("│")}`);
+    lines.push(`  ${color.coral("╰")}${color.coral("─".repeat(width - 4))}${color.coral("╯")}`);
+    return lines;
+  };
+
+  emitKeypressEvents(input);
+  const previousRawMode = input.isRaw;
+  input.setRawMode(true);
+  input.resume();
+  let lines = render();
+  output.write(`\u001b[?25l${lines.join("\n")}`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      input.removeListener("keypress", onKeypress);
+      input.setRawMode(Boolean(previousRawMode));
+      output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const redraw = () => {
+      output.write(`\u001b[${lines.length - 1}A`);
+      lines = render();
+      output.write(lines.map((line) => `\u001b[2K\r${line}`).join("\n"));
+    };
+    const move = (delta) => {
+      selected = Math.max(0, Math.min(PERMISSION_OPTIONS.length - 1, selected + delta));
+      redraw();
+    };
+    const onKeypress = (str, key = {}) => {
+      const name = String(key.name || "").toLowerCase();
+      const sequence = key.sequence || str || "";
+      const up = name === "up" || name === "k" || name === "8" || sequence === "\u001b[A" || sequence === "\u001bOA";
+      const down = name === "down" || name === "j" || name === "2" || sequence === "\u001b[B" || sequence === "\u001bOB";
+      const pageUp = name === "pageup" || sequence === "\u001b[5~";
+      const pageDown = name === "pagedown" || sequence === "\u001b[6~";
+      const home = name === "home" || sequence === "\u001b[H" || sequence === "\u001b[1~";
+      const end = name === "end" || sequence === "\u001b[F" || sequence === "\u001b[4~";
+      if (key.ctrl && name === "c") { finish(null, new Error("Aborted with Ctrl+C")); return; }
+      if (isEscapeKey(str, key)) { finish(null); return; }
+      if (up) { move(-1); return; }
+      if (down) { move(1); return; }
+      if (pageUp) { move(-viewport); return; }
+      if (pageDown) { move(viewport); return; }
+      if (home) { selected = 0; redraw(); return; }
+      if (end) { selected = PERMISSION_OPTIONS.length - 1; redraw(); return; }
+      if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
+        finish(PERMISSION_OPTIONS[selected].mode);
+      }
+    };
+    input.on("keypress", onKeypress);
+  });
+}
+
 async function selectModelInteractive(selected) {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") {
     printModels(selected);
@@ -1563,7 +1686,8 @@ ${color.cyan("Nexara CLI commands")}
   /threads                      List recent saved conversations
   /clear                        Clear local context and create a fresh thread
   /compact                      Summarize the conversation to free the context window
-  /permissions [mode]           Set read-only, plan, edits, commands, auto, or full access
+  /permission [mode]            Choose Always ask, Approve for me, Sandboxed, or Full access
+  /permissions [mode]           Alias for /permission
   /tools                        Show the tools available to this CLI session
   /mcp                          Show local MCP configuration and connected server hints
   /skills                       Show workspace skills available to the CLI
@@ -1589,7 +1713,7 @@ ${color.dim("Tip: type / and press Tab to autocomplete commands; use ↑/↓ or 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
 ${color.dim("Updates: nexara update (install now), nexara update --on / --off (toggle silent background updates)")}
 ${color.dim("Outside the REPL: nexara \"prompt\", --print, --output-format json|stream-json, --max-turns N, --max-budget USD")}
-${color.dim("Automation flags: --allowed-tools A,B · --disallowed-tools A,B · --permission-mode read-only|plan|allow-edits|allow-commands|auto|full · --no-session-persistence")}
+${color.dim("Automation flags: --allowed-tools A,B · --disallowed-tools A,B · --permission-mode ask|auto|sandboxed|full · --no-session-persistence")}
 `);
 }
 
@@ -1689,8 +1813,8 @@ function parseArgs(argv) {
       options.disallowedTools = requiredValue(i, arg, "a comma-separated tool list").split(",").map((value) => value.trim()).filter(Boolean);
       i += 1;
     } else if (arg === "--permission-mode") {
-      options.permissionMode = requiredValue(i, arg, "read-only, plan, allow-edits, allow-commands, auto, or full").toLowerCase();
-      if (!["ask", "read-only", "plan", "allow-edits", "allow-commands", "auto", "full"].includes(options.permissionMode)) throw new Error("Unknown permission mode.");
+      options.permissionMode = requiredValue(i, arg, "ask, auto, sandboxed, or full").toLowerCase();
+      if (!["ask", "read-only", "plan", "allow-edits", "allow-commands", "auto", "sandboxed", "full"].includes(options.permissionMode)) throw new Error("Unknown permission mode.");
       i += 1;
     } else if (arg === "--no-session-persistence") {
       options.noSessionPersistence = true;
@@ -2112,16 +2236,33 @@ async function handleSlash(state, line) {
       }
       return true;
     }
+    case "/permission":
     case "/permissions": {
-      const modes = ["ask", "read-only", "plan", "allow-edits", "allow-commands", "auto", "full"];
+      const aliases = new Map([
+        ["ask", "ask"],
+        ["always-ask", "ask"],
+        ["approve", "auto"],
+        ["approve-for-me", "auto"],
+        ["auto", "auto"],
+        ["sandbox", "sandboxed"],
+        ["sandboxed", "sandboxed"],
+        ["full", "full"],
+        // Keep older documented modes usable for existing configurations.
+        ["read-only", "read-only"],
+        ["plan", "plan"],
+        ["allow-edits", "allow-edits"],
+        ["allow-commands", "allow-commands"],
+      ]);
       if (!argument) {
-        console.log(`Permission mode: ${color.cream(permissionModeLabel(effectivePermissionMode(state)))}`);
-        console.log(color.dim(`  Modes: ${modes.join(" · ")}`));
+        const mode = await selectPermissionInteractive(effectivePermissionMode(state), state.cwd);
+        if (!mode) return true;
+        state.config = saveConfig({ permissionMode: mode });
+        notice(`Permission mode set to ${color.cream(permissionModeLabel(mode))}.`);
         return true;
       }
-      const mode = argument.toLowerCase();
-      if (!modes.includes(mode)) {
-        console.log(color.red(`Unknown permission mode. Choose: ${modes.join(", ")}.`));
+      const mode = aliases.get(argument.toLowerCase().replace(/\s+/g, "-"));
+      if (!mode) {
+        console.log(color.red("Unknown permission mode. Choose Always ask, Approve for me, Sandboxed, or Full access."));
         return true;
       }
       state.config = saveConfig({ permissionMode: mode });

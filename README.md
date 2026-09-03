@@ -137,7 +137,7 @@ Interactive slash commands:
 - `/threads` — list recent saved threads
 - `/clear` — clear the local context and begin a new thread
 - `/compact` — keep a compact local tail of the current context
-- `/permissions [mode]` — choose `ask`, `read-only`, `plan`, `allow-edits`, `allow-commands`, `auto`, or `full`
+- `/permission [mode]` — choose `Always ask`, `Approve for me`, `Sandboxed`, or `Full access` (the older `/permissions` alias is also supported)
 - `/tools` — inspect the local tool surface available to the agent
 - `/mcp`, `/skills`, `/plugins` — inspect workspace automation manifests
 - `/agents`, `/background`, `/tasks`, `/logs <id>`, `/stop <id>` — monitor or control local background work
@@ -145,6 +145,12 @@ Interactive slash commands:
 - `/config` — show the non-secret CLI config location
 - `/status` — show session, thread, and model status
 - `/quit` or `/exit` — leave the session
+
+Permission modes: `Always ask` prompts before mutating tools; `Approve for me`
+automatically approves safe edits and commands while keeping destructive actions
+behind a prompt; `Sandboxed` allows the agent to work freely inside the current
+project (including Bash and local servers) but asks before accessing paths
+outside it; `Full access` removes that outside-project approval boundary.
 
 The agent can use a bidirectional local tool protocol. It shows the call before
 running it, asks for approval for changes, returns the result to the model, and
@@ -159,7 +165,7 @@ For scripts and CI, use the same controls without opening the REPL:
 
 ```text
 nexara -p "Review this project" --output-format json
-nexara -p "Run the tests and fix the failure" --permission-mode allow-edits --max-turns 12
+nexara -p "Run the tests and fix the failure" --permission-mode sandboxed --max-turns 12
 nexara -p "Inspect the build" --output-format stream-json --max-budget 0.50
 nexara -p "Read-only audit" --allowed-tools Read,Search,Glob --disallowed-tools Bash
 nexara -p "One-off task" --no-session-persistence
