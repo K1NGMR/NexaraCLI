@@ -427,8 +427,11 @@ function panelLine(text, innerWidth) {
 
 function printPanel(lines, { accent = color.coral } = {}) {
   const width = terminalWidth();
-  const innerWidth = width - 4;
-  console.log(`  ${accent("╭")}${accent("─".repeat(width - 2))}${accent("╮")}`);
+  // Two leading spaces plus the framed content must fit inside the terminal;
+  // keeping this calculation centralized prevents border spill on Windows
+  // Terminal, where an extra column is especially noticeable.
+  const innerWidth = width - 6;
+  console.log(`  ${accent("╭")}${accent("─".repeat(width - 4))}${accent("╮")}`);
   for (const line of lines) console.log(panelLine(line, innerWidth));
   console.log(`  ${accent("╰")}${accent("─".repeat(width - 2))}${accent("╯")}`);
 }
@@ -448,32 +451,73 @@ function notice(message, tone = "teal") {
   console.log(`  ${paint(marker)} ${message}`);
 }
 
-function printBanner(config) {
+function printBanner(config, user = null) {
+  const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
+  const account = user?.email || "Nexara account";
   console.log();
-  printPanel([
-    `${color.coral("✦")} ${color.cream("NEXARA")} ${color.muted("TERMINAL WORKSPACE")} ${color.dim(`v${CURRENT_VERSION}`)}`,
-    color.muted("A focused space to think, build, research, and ship."),
-    "",
-    `${color.muted("WORKSPACE  ")} ${color.cream(displayPath())}`,
-    `${chip("Model", modelLabel(config.selectedModel))}   ${chip("Effort", REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort, color.teal)}`,
-  ]);
+  console.log(`${color.coral("✦")} ${color.cream("Nexara")} ${color.muted(`v${CURRENT_VERSION}`)}`);
+  console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted("with")} ${color.cream(effort)} ${color.muted(`effort · ${account}`)}`);
+  console.log(`  ${color.muted(displayPath())}`);
   console.log();
-  console.log(color.cream("  What would you like to work on?"));
-  console.log(`  ${color.coral("/plan")} ${color.muted("map a project")}   ${color.coral("/research")} ${color.muted("investigate a topic")}   ${color.coral("/attach")} ${color.muted("bring in a file")}`);
-  console.log(color.dim("  Type / then press Tab for commands · Ctrl+C twice exits.\n"));
+  console.log(`  ${color.teal("✓")} ${color.cream("Workspace ready")} ${color.muted("· /status for session details")}`);
+  console.log();
+  console.log(`  ${color.cream("Keep working from anywhere")}`);
+  console.log(`  ${color.muted("Your Nexara threads stay available across the web, desktop, and mobile app.")}`);
+  console.log(`  ${color.muted("Use /resume to continue a saved thread · /threads to browse recent work.")}`);
+  console.log();
+  console.log(color.muted(`  ${"─".repeat(Math.max(20, terminalWidth() - 2))}`));
+  console.log(`  ${color.muted(`${effort} · /effort`)} `);
+  console.log(color.muted(`  ${"─".repeat(Math.max(20, terminalWidth() - 2))}`));
+  console.log(`  ${color.coral("▸")} ${color.cream("auto mode on")} ${color.muted("(Shift+Tab to cycle)")} ${color.dim("· ? for shortcuts")}`);
+  console.log();
 }
 
 function printLoginScreen() {
   console.log();
   printPanel([
-    `${color.coral("✦")} ${color.cream("Welcome to Nexara")}`,
-    color.muted("Sign in once to keep your models, limits, and threads together."),
+    `${color.coral("✦")} ${color.cream("Sign in to Nexara")}`,
+    color.muted("Your account, models, and saved threads."),
     "",
-    `${color.coral("1")}  ${color.cream("Email and password")}      ${color.muted("private account sign-in")}`,
-    `${color.coral("2")}  ${color.cream("Continue with Google")}   ${color.muted("opens a secure browser window")}`,
-    `${color.coral("3")}  ${color.cream("Scan a QR code")}          ${color.muted("approve from Nexara on your phone")}`,
+    `${color.coral("1")}  ${color.cream("Email and password")}`,
+    `${color.coral("2")}  ${color.cream("Continue with Google")}`,
+    `${color.coral("3")}  ${color.cream("Scan a QR code")}`,
   ]);
+  console.log(color.dim("  Select a method below. Your credentials stay inside the CLI sign-in flow.\n"));
+}
+
+async function confirmWorkspace(config) {
+  if (!input.isTTY || !output.isTTY) return true;
+  const directory = path.resolve(process.cwd());
+  const trusted = Array.isArray(config.trustedDirectories) && config.trustedDirectories.some((entry) => entry.toLowerCase() === directory.toLowerCase());
+  if (trusted || process.env.NEXARA_SKIP_WORKSPACE_TRUST === "1") return true;
+
   console.log();
+  console.log(color.amber("  Accessing workspace:"));
+  console.log();
+  console.log(`  ${color.cream(directory)}`);
+  console.log();
+  console.log(color.muted("  Quick safety check: Is this a project you created or one you trust?"));
+  console.log(color.muted("  Nexara can use files you explicitly attach from this folder."));
+  console.log();
+  console.log(`  ${color.coral("> ")} ${color.cream("No, exit")}`);
+  console.log(`    ${color.muted("Yes, I trust this folder")}`);
+  console.log();
+  console.log(color.dim("  Press Enter to exit · type y then Enter to trust · Ctrl+C cancels"));
+  const rl = readline.createInterface({ input, output });
+  try {
+    const answer = (await rl.question(`  ${color.coral("› ")}`)).trim().toLowerCase();
+    if (answer !== "y" && answer !== "yes" && answer !== "2") {
+      console.log(color.yellow("\n  Workspace not trusted. Nexara is exiting."));
+      return false;
+    }
+  } finally {
+    rl.close();
+  }
+  const directories = Array.isArray(config.trustedDirectories) ? config.trustedDirectories : [];
+  saveConfig({ trustedDirectories: [...new Set([...directories, directory])] });
+  console.log(color.teal("\n  ✓ Workspace trusted for future Nexara sessions.\n"));
+  console.log();
+  return true;
 }
 
 function printAssistantHeader(state, mode) {
@@ -939,7 +983,7 @@ async function handleSlash(state, line) {
 
 async function interactive(config, auth, configPath, existingState) {
   const state = existingState || { config, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
-  printBanner(config);
+  printBanner(config, await auth.user());
   const rl = readline.createInterface({
     input,
     output,
@@ -1131,6 +1175,7 @@ export async function main(argv = process.argv.slice(2)) {
     await oneShot(nextConfig, auth, { ...options, prompt: options.prompt[0] === "login" ? [] : options.prompt }, configPath);
     return;
   }
+  if (!(await confirmWorkspace(nextConfig))) return;
   await ensureSignedIn(nextConfig, auth, options.google, options.qr);
   if (options.continue) {
     const state = { config: nextConfig, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };

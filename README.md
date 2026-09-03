@@ -26,6 +26,11 @@ Then run it from PowerShell **or** Command Prompt:
 nexara
 ```
 
+When you start Nexara in a new folder, it shows the workspace path and asks
+you to trust it before continuing. Press `y` to remember that folder, or press
+Enter to exit. Set `NEXARA_SKIP_WORKSPACE_TRUST=1` for non-interactive local
+environments where the folder is already trusted by your own tooling.
+
 If you prefer the npm registry after the package is published:
 
 ```powershell
