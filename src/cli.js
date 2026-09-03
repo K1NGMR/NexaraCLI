@@ -1181,6 +1181,7 @@ function printSessionFooter(state) {
   const lines = [
     color.muted(`  ${"─".repeat(width)}`),
     ...(state.todos?.length ? [`  ${color.coral("▸")} ${color.cream("Task plan")} ${color.muted(`· ${todoSummary(state.todos)} · /tasks to inspect`)}`] : []),
+    ...(state.pendingMessages?.length ? [`  ${color.amber("↳")} ${color.cream(`${state.pendingMessages.length} queued`)} ${color.muted("· waiting behind the active turn")}`] : []),
     `  ${color.muted(`${effort} · /effort`)} ${color.dim("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted("· /model to change")}`,
     `  ${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("· /help for shortcuts")}`,
     `  ${color.muted("·")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}`,
@@ -2246,8 +2247,17 @@ async function interactive(config, auth, configPath, existingState) {
     crlfDelay: Infinity,
     terminal: Boolean(input.isTTY && output.isTTY),
   });
-  state.askApproval = async (message) => rl.question(`\n  ${color.amber("! Approval required")}\n    ${message}`);
-  state.askQuestion = async (message) => rl.question(message);
+  let questionActive = false;
+  const askInComposer = async (message, options) => {
+    questionActive = true;
+    try {
+      return await rl.question(message, options);
+    } finally {
+      questionActive = false;
+    }
+  };
+  state.askApproval = async (message) => askInComposer(`\n  ${color.amber("! Approval required")}\n    ${message}`);
+  state.askQuestion = async (message) => askInComposer(message);
 
   // Push-to-talk: press M at the prompt to start recording, press M again to
   // stop and transcribe. The transcript is appended to the current line.
@@ -2418,39 +2428,95 @@ async function interactive(config, auth, configPath, existingState) {
 
   input.on("keypress", onKeypress);
   input.on("keypress", onSlashKeypress);
-  rl.prompt();
-  try {
-    for await (const raw of rl) {
-      const line = raw.trim();
-      if (!line) {
-        clearSlashSuggestions(true);
-        clearComposerFooter();
-        if (composerFooterLines === 0 && state.messages.length) renderComposerFooter();
-        rl.prompt();
-        continue;
-      }
-      clearSlashSuggestions(true);
-      clearComposerFooter();
-      let keepGoing = true;
-      try {
-        if (line.startsWith("/")) {
-          state.modalOpen = true;
-          try {
-            keepGoing = await handleSlash(state, line);
-          } finally {
-            state.modalOpen = false;
+  const pendingMessages = [];
+  state.pendingMessages = pendingMessages;
+  let activeRun = false;
+  let closing = false;
+  let resolveInteractive;
+  const interactiveFinished = new Promise((resolve) => { resolveInteractive = resolve; });
+
+  function showComposer() {
+    if (closing || rl.closed) return;
+    clearComposerFooter();
+    renderComposerFooter();
+    rl.prompt();
+  }
+
+  async function runInteractiveLine(line, files) {
+    activeRun = true;
+    state.busy = true;
+    try {
+      if (line.startsWith("/")) {
+        state.modalOpen = true;
+        try {
+          const keepGoing = await handleSlash(state, line);
+          if (!keepGoing) {
+            closing = true;
+            state.cancelCurrent?.();
           }
-        } else {
-          await runPrompt(state, line, { files: state.pendingImages });
+        } finally {
+          state.modalOpen = false;
         }
-      } catch (error) {
-        console.log(color.red(error instanceof Error ? error.message : String(error)));
+      } else {
+        await runPrompt(state, line, { files });
       }
-      if (!keepGoing) break;
-      renderComposerFooter();
-      rl.prompt();
+    } catch (error) {
+      console.log(color.red(error instanceof Error ? error.message : String(error)));
+    } finally {
+      activeRun = false;
+      state.busy = false;
+      if (closing) {
+        rl.close();
+        return;
+      }
+      const next = pendingMessages.shift();
+      if (next) {
+        void runInteractiveLine(next.line, next.files);
+      } else {
+        showComposer();
+      }
     }
+  }
+
+  const onLine = (raw) => {
+    if (closing || questionActive || state.modalOpen) return;
+    const line = raw.trim();
+    clearSlashSuggestions(true);
+    clearComposerFooter();
+    if (!line) {
+      showComposer();
+      return;
+    }
+    const files = state.pendingImages.slice();
+    state.pendingImages = [];
+    if (activeRun) {
+      pendingMessages.push({ line, files });
+      console.log(`  ${color.amber("↳")} ${color.cream("Queued")} ${color.muted(`message ${pendingMessages.length} · will run after the current turn`)}`);
+      showComposer();
+      return;
+    }
+    void runInteractiveLine(line, files);
+    // Keep a real composer mounted during the request so the next Enter is
+    // accepted immediately instead of waiting for the model to finish.
+    showComposer();
+  };
+
+  const onClose = () => {
+    if (!closing) {
+      closing = true;
+      state.cancelCurrent?.();
+    }
+    resolveInteractive();
+  };
+
+  rl.on("line", onLine);
+  rl.once("close", onClose);
+  showComposer();
+  try {
+    await interactiveFinished;
   } finally {
+    rl.removeListener("line", onLine);
+    rl.removeListener("close", onClose);
     input.removeListener("keypress", onKeypress);
     input.removeListener("keypress", onSlashKeypress);
     cancelSlashSuggestionTimer();
