@@ -31,9 +31,11 @@ you to trust it before continuing. Press `y` to remember that folder, or press
 Enter to exit. Set `NEXARA_SKIP_WORKSPACE_TRUST=1` for non-interactive local
 environments where the folder is already trusted by your own tooling.
 
-Interactive startup includes a small animated Nexara Petal mascot and a typed
-welcome line. Set `NEXARA_NO_ANIMATION=1` when using a slow terminal, screen
-reader, or automated environment.
+Interactive startup clears the terminal viewport, shows an animated pixel-art
+Nexara Petal mascot, and offers live described slash-command suggestions as you
+type. Set `NEXARA_NO_ANIMATION=1` when using a slow terminal, screen reader, or
+automated environment; set `NEXARA_NO_CLEAR=1` to keep the existing terminal
+scrollback.
 
 If you prefer the npm registry after the package is published:
 

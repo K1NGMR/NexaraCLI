@@ -392,6 +392,45 @@ const SLASH_COMMANDS = [
   "/stop", "/download", "/open", "/reveal", "/login", "/update", "/status", "/quit", "/exit",
 ];
 
+const SLASH_COMMAND_DESCRIPTIONS = new Map([
+  ["/help", "Show commands, shortcuts, login, and automation options."],
+  ["/model", "Choose the AI model for this session or set a new default."],
+  ["/models", "Print the complete model catalog and pricing."],
+  ["/effort", "Set reasoning effort: low, medium, high, extra high, or max."],
+  ["/attach", "Attach an image, PDF, or text/code file to your next prompt."],
+  ["/image", "Attach an image or clear the files waiting for your next prompt."],
+  ["/think", "Send a prompt in deep-thinking mode."],
+  ["/research", "Search, investigate, and report findings for a prompt."],
+  ["/perplexity", "Use search-first mode and include supporting sources."],
+  ["/plan", "Plan and validate a project before execution."],
+  ["/honest", "Ask for a direct answer with minimal padding."],
+  ["/goal", "Work autonomously toward a goal across multiple turns."],
+  ["/new", "Start a fresh saved conversation."],
+  ["/resume", "Resume the last saved thread or choose a thread ID."],
+  ["/threads", "Browse recent saved conversations."],
+  ["/clear", "Clear local context and start a fresh thread."],
+  ["/compact", "Summarize the conversation to free context space."],
+  ["/config", "Show the local Nexara configuration path."],
+  ["/permissions", "Choose read-only, plan, edits, commands, auto, or full access."],
+  ["/tools", "Show the tools available to the CLI agent."],
+  ["/mcp", "Show MCP configuration and connected server hints."],
+  ["/skills", "Show workspace skills available to the CLI agent."],
+  ["/plugins", "Show workspace plugins available to the CLI agent."],
+  ["/agents", "Show local subagents and their current state."],
+  ["/background", "Show background commands and their output state."],
+  ["/tasks", "Show active task and background-process activity."],
+  ["/logs", "Show output from a background command."],
+  ["/stop", "Stop a background command or subagent."],
+  ["/download", "Show artifacts saved from the current session."],
+  ["/open", "Open a local file with its system application."],
+  ["/reveal", "Reveal a local file in Explorer or Finder."],
+  ["/login", "Sign in again or switch the active Nexara account."],
+  ["/update", "Check for and install a newer CLI version."],
+  ["/status", "Show account, model, thread, and context state."],
+  ["/quit", "Exit Nexara."],
+  ["/exit", "Exit Nexara."],
+]);
+
 const ansi = (code, text) => `\u001b[${code}m${text}\u001b[0m`;
 const rgb = (red, green, blue) => (text) => ansi(`38;2;${red};${green};${blue}`, text);
 // The CLI uses Nexara's warm dark-surface palette: cream text, coral action,
@@ -1343,6 +1382,36 @@ function slashCompleter(line) {
   return [matches.length ? matches : SLASH_COMMANDS, line];
 }
 
+function slashSuggestionMatches(line) {
+  const value = String(line || "");
+  if (!/^\/[^\s]*$/.test(value)) return [];
+  const query = value.toLowerCase();
+  return SLASH_COMMANDS
+    .filter((command) => command.startsWith(query))
+    .map((command) => ({ command, description: SLASH_COMMAND_DESCRIPTIONS.get(command) || "Run a Nexara command." }));
+}
+
+function renderSlashSuggestions(line, activeIndex = 0) {
+  const matches = slashSuggestionMatches(line);
+  if (!matches.length) return [];
+  const limit = Math.max(3, Math.min(5, pickerTerminalHeight() - 14));
+  const bounded = Math.max(0, Math.min(matches.length - 1, activeIndex));
+  const start = Math.max(0, Math.min(bounded - limit + 1, matches.length - limit));
+  const visible = matches.slice(start, start + limit);
+  const commandWidth = 22;
+  const rows = visible.map((entry, offset) => {
+    const active = start + offset === bounded;
+    const command = entry.command.padEnd(commandWidth, " ");
+    const commandText = active ? color.coral(command) : color.muted(command);
+    const description = active ? color.cream(entry.description) : color.muted(entry.description);
+    return `  ${commandText} ${description}`;
+  });
+  if (matches.length > limit) {
+    rows.push(color.dim(`  ${start > 0 ? "↑ " : ""}${matches.length} matches · Tab to fill · Enter to run${start + limit < matches.length ? " ↓" : ""}`));
+  }
+  return rows;
+}
+
 function printHelp() {
   console.log(`
 ${color.cyan("Nexara CLI commands")}
@@ -2012,7 +2081,10 @@ async function interactive(config, auth, configPath, existingState) {
     input,
     output,
     prompt: color.coral("> "),
-    completer: slashCompleter,
+    // The CLI draws its own live, described completion strip. Returning no
+    // readline completions prevents Node's default multi-line dump from
+    // fighting that renderer when Tab is pressed.
+    completer: (line) => [[], line],
     crlfDelay: Infinity,
     terminal: Boolean(input.isTTY && output.isTTY),
   });
@@ -2032,6 +2104,14 @@ async function interactive(config, auth, configPath, existingState) {
   // Keep its height so a submitted line can remove it before the next turn
   // is committed, leaving the transcript growing down from the top.
   let composerFooterLines = 0;
+  let slashSuggestionLines = 0;
+  let slashSuggestionIndex = 0;
+  let slashSuggestionTimer = null;
+
+  function cancelSlashSuggestionTimer() {
+    if (slashSuggestionTimer) clearImmediate(slashSuggestionTimer);
+    slashSuggestionTimer = null;
+  }
 
   function clearComposerFooter() {
     if (!composerFooterLines || !output.isTTY) return;
@@ -2043,6 +2123,52 @@ async function interactive(config, auth, configPath, existingState) {
 
   function renderComposerFooter() {
     composerFooterLines = printSessionFooter(state);
+  }
+
+  function clearSlashSuggestions(afterSubmit = false) {
+    cancelSlashSuggestionTimer();
+    if (!slashSuggestionLines || !output.isTTY) {
+      slashSuggestionLines = 0;
+      slashSuggestionIndex = 0;
+      return;
+    }
+    const rows = slashSuggestionLines;
+    if (afterSubmit) {
+      // readline has already moved to the blank row below the submitted
+      // prompt. Remove the suggestion rows, then return to that blank row.
+      output.write(`\r\u001b[${rows + 1}A\u001b[${rows}M\u001b[1B\r`);
+    } else {
+      // While editing, the cursor is still inside the prompt row.
+      output.write(`\r\u001b[${rows}A\u001b[${rows}M`);
+    }
+    slashSuggestionLines = 0;
+    slashSuggestionIndex = 0;
+  }
+
+  function drawSlashSuggestions() {
+    slashSuggestionTimer = null;
+    if (state.modalOpen || !output.isTTY) return;
+    const rows = renderSlashSuggestions(rl.line, slashSuggestionIndex);
+    if (slashSuggestionLines) clearSlashSuggestions();
+    if (!rows.length) return;
+    const cursor = typeof rl.getCursorPos === "function" ? rl.getCursorPos() : { cols: 2 };
+    output.write(`\r\u001b[${rows.length}L${rows.join("\n")}\n\r\u001b[${Math.max(0, Number(cursor.cols) || 0)}C`);
+    slashSuggestionLines = rows.length;
+  }
+
+  function scheduleSlashSuggestions() {
+    if (!output.isTTY || state.modalOpen || slashSuggestionTimer) return;
+    slashSuggestionTimer = setImmediate(drawSlashSuggestions);
+  }
+
+  function fillSlashSuggestion() {
+    const matches = slashSuggestionMatches(rl.line);
+    if (!matches.length) return;
+    const choice = matches[Math.max(0, Math.min(matches.length - 1, slashSuggestionIndex))];
+    rl.write(null, { ctrl: true, name: "u" });
+    rl.write(`${choice.command} `);
+    slashSuggestionIndex = 0;
+    scheduleSlashSuggestions();
   }
 
   async function transcribeVoice() {
@@ -2098,6 +2224,7 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   const onKeypress = (str, key) => {
+    if (state.modalOpen) return;
     if (key?.ctrl && key.name === "c") {
       if (state.cancelCurrent) state.cancelCurrent();
       return;
@@ -2115,22 +2242,46 @@ async function interactive(config, auth, configPath, existingState) {
     void toggleVoice();
   };
 
+  const onSlashKeypress = (str, key = {}) => {
+    if (state.modalOpen || key.ctrl || key.meta || key.alt) return;
+    const name = String(key.name || "").toLowerCase();
+    if (name === "return" || name === "enter" || name === "escape") return;
+    if (name === "tab") {
+      setImmediate(fillSlashSuggestion);
+      return;
+    }
+    if (name === "up" && slashSuggestionMatches(rl.line).length) {
+      slashSuggestionIndex = Math.max(0, slashSuggestionIndex - 1);
+    } else if (name === "down" && slashSuggestionMatches(rl.line).length) {
+      slashSuggestionIndex = Math.min(slashSuggestionMatches(rl.line).length - 1, slashSuggestionIndex + 1);
+    }
+    scheduleSlashSuggestions();
+  };
+
   input.on("keypress", onKeypress);
+  input.on("keypress", onSlashKeypress);
   rl.prompt();
   try {
     for await (const raw of rl) {
       const line = raw.trim();
       if (!line) {
+        clearSlashSuggestions(true);
         clearComposerFooter();
         if (composerFooterLines === 0 && state.messages.length) renderComposerFooter();
         rl.prompt();
         continue;
       }
+      clearSlashSuggestions(true);
       clearComposerFooter();
       let keepGoing = true;
       try {
         if (line.startsWith("/")) {
-          keepGoing = await handleSlash(state, line);
+          state.modalOpen = true;
+          try {
+            keepGoing = await handleSlash(state, line);
+          } finally {
+            state.modalOpen = false;
+          }
         } else {
           await runPrompt(state, line, { files: state.pendingImages });
         }
@@ -2143,6 +2294,9 @@ async function interactive(config, auth, configPath, existingState) {
     }
   } finally {
     input.removeListener("keypress", onKeypress);
+    input.removeListener("keypress", onSlashKeypress);
+    cancelSlashSuggestionTimer();
+    clearSlashSuggestions(true);
     if (mic) await mic.stop().catch(() => {});
     clearBackgroundProcesses();
     rl.close();
