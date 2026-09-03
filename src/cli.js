@@ -378,6 +378,8 @@ const color = {
   coral: rgb(204, 120, 92),
   coralActive: rgb(169, 88, 62),
   cream: rgb(250, 249, 245),
+  violet: rgb(154, 91, 230),
+  pink: rgb(239, 117, 205),
   muted: rgb(160, 157, 150),
   teal: rgb(93, 184, 166),
   amber: rgb(232, 165, 90),
@@ -392,6 +394,56 @@ const color = {
   magenta: rgb(204, 120, 92),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
+const PETAL_FRAMES = [
+  [
+    "       ·✦·       ",
+    "     ╱╲ ╱╲       ",
+    "  ◢██◤ ◥██◣     ",
+    " ◥██◣  ✧  ◢██◤  ",
+    "   ◥███◣███◤     ",
+    "      ◥◤         ",
+  ],
+  [
+    "        ✦        ",
+    "      ╱╲         ",
+    "  ◢██◤  ◥██◣     ",
+    " ◥██◣  ✧  ◢██◤  ",
+    "   ◥███████◤     ",
+    "       ◥◤        ",
+  ],
+  [
+    "      ·✦·        ",
+    "       ╲╱        ",
+    " ◢██◣     ◢██◣  ",
+    "◥██◤  ◉ ◉  ◥██◤ ",
+    "  ◥███ ᴗ ███◤    ",
+    "       ◥◤        ",
+  ],
+  [
+    "       ✦         ",
+    "     ╱╲ ╱╲       ",
+    "  ◢██◤ ◥██◣     ",
+    " ◥██◣  ◉  ◢██◤  ",
+    "   ◥███ᴗ███◤     ",
+    "      ◥◤         ",
+  ],
+  [
+    "      ·✦·        ",
+    "       ╲╱        ",
+    " ◢██◣     ◢██◣  ",
+    "◥██◤  ◉ ◉  ◥██◤ ",
+    "  ◥███ ᴗ ███◤    ",
+    "        ·         ",
+  ],
+  [
+    "        ✦        ",
+    "      ╱╲         ",
+    "  ◢██◤  ◥██◣     ",
+    " ◥██◣  ✧  ◢██◤  ",
+    "   ◥███████◤     ",
+    "       ◥◤        ",
+  ],
+];
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
@@ -451,13 +503,58 @@ function notice(message, tone = "teal") {
   console.log(`  ${paint(marker)} ${message}`);
 }
 
-function printBanner(config, user = null) {
+function petalLine(line, frame) {
+  const painted = frame % 3 === 0 ? color.violet(line) : frame % 3 === 1 ? color.coral(line) : color.pink(line);
+  return `  ${painted}`;
+}
+
+function mascotFrame(frameIndex, label = "") {
+  const frame = PETAL_FRAMES[frameIndex % PETAL_FRAMES.length];
+  return [...frame.map((line) => petalLine(line, frameIndex)), label ? `  ${color.muted(label)}` : ""];
+}
+
+function pause(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function animateMascot(label = "Waking up your workspace") {
+  if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ANIMATION === "1") {
+    return;
+  }
+  const frameLines = mascotFrame(0, label);
+  output.write("\u001b[?25l");
+  for (let index = 0; index < 9; index += 1) {
+    if (index > 0) output.write(`\u001b[${frameLines.length - 1}A`);
+    const lines = mascotFrame(index, label);
+    output.write(lines.map((line) => `\u001b[2K${line}`).join("\n"));
+    await pause(85);
+  }
+  output.write(`\u001b[${frameLines.length - 1}A`);
+  output.write(frameLines.map(() => "\u001b[2K").join("\n"));
+  output.write("\u001b[?25h\n");
+}
+
+async function animateText(text, paint = color.muted) {
+  if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ANIMATION === "1") {
+    console.log(paint(text));
+    return;
+  }
+  for (const character of text) {
+    output.write(paint(character));
+    await pause(12);
+  }
+  output.write("\n");
+}
+
+async function printBanner(config, user = null) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
   const account = user?.email || "Nexara account";
   console.log();
   console.log(`${color.coral("✦")} ${color.cream("Nexara")} ${color.muted(`v${CURRENT_VERSION}`)}`);
   console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted("with")} ${color.cream(effort)} ${color.muted(`effort · ${account}`)}`);
   console.log(`  ${color.muted(displayPath())}`);
+  console.log();
+  await animateText("  A calm terminal for ambitious work.");
   console.log();
   console.log(`  ${color.teal("✓")} ${color.cream("Workspace ready")} ${color.muted("· /status for session details")}`);
   console.log();
@@ -983,7 +1080,7 @@ async function handleSlash(state, line) {
 
 async function interactive(config, auth, configPath, existingState) {
   const state = existingState || { config, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
-  printBanner(config, await auth.user());
+  await printBanner(config, await auth.user());
   const rl = readline.createInterface({
     input,
     output,
@@ -1170,7 +1267,9 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (command === "whoami" && options.prompt.length === 1) { const user = await auth.user(); console.log(user?.email || "Not signed in."); return; }
-  if (options.print || options.prompt.length > 0 || options.images.length > 0 || (options.continue && options.prompt.length > 0)) {
+  const startsInteractive = !(options.print || options.prompt.length > 0 || options.images.length > 0 || (options.continue && options.prompt.length > 0));
+  if (startsInteractive) await animateMascot();
+  if (!startsInteractive) {
     await ensureSignedIn(nextConfig, auth, options.google, options.qr);
     await oneShot(nextConfig, auth, { ...options, prompt: options.prompt[0] === "login" ? [] : options.prompt }, configPath);
     return;
