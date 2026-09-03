@@ -369,16 +369,29 @@ const SLASH_COMMANDS = [
   "/compact", "/config", "/login", "/update", "/status", "/quit", "/exit",
 ];
 
+const ansi = (code, text) => `\u001b[${code}m${text}\u001b[0m`;
+const rgb = (red, green, blue) => (text) => ansi(`38;2;${red};${green};${blue}`, text);
+// The CLI uses Nexara's warm dark-surface palette: cream text, coral action,
+// teal for healthy state, and amber for attention. It deliberately avoids the
+// generic blue/cyan terminal look.
 const color = {
-  blue: (text) => `\u001b[34m${text}\u001b[0m`,
-  cyan: (text) => `\u001b[36m${text}\u001b[0m`,
-  dim: (text) => `\u001b[2m${text}\u001b[0m`,
-  green: (text) => `\u001b[32m${text}\u001b[0m`,
-  magenta: (text) => `\u001b[35m${text}\u001b[0m`,
-  red: (text) => `\u001b[31m${text}\u001b[0m`,
-  white: (text) => `\u001b[37m${text}\u001b[0m`,
-  yellow: (text) => `\u001b[33m${text}\u001b[0m`,
+  coral: rgb(204, 120, 92),
+  coralActive: rgb(169, 88, 62),
+  cream: rgb(250, 249, 245),
+  muted: rgb(160, 157, 150),
+  teal: rgb(93, 184, 166),
+  amber: rgb(232, 165, 90),
+  red: rgb(198, 69, 69),
+  dim: (text) => ansi("2", text),
+  green: rgb(93, 184, 114),
+  yellow: rgb(212, 160, 23),
+  // Compatibility aliases retained while commands transition to the palette.
+  cyan: rgb(204, 120, 92),
+  white: rgb(250, 249, 245),
+  blue: rgb(93, 184, 166),
+  magenta: rgb(204, 120, 92),
 };
+const ANSI_RE = /\u001b\[[0-9;]*m/g;
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
@@ -392,31 +405,80 @@ function displayPath(directory = process.cwd()) {
   return directory;
 }
 
+function visibleLength(text) {
+  return String(text).replace(ANSI_RE, "").length;
+}
+
+function terminalWidth() {
+  const columns = Number(output.columns) || 80;
+  return Math.max(54, Math.min(columns - 4, 94));
+}
+
+function shorten(text, width) {
+  if (visibleLength(text) <= width) return text;
+  const plain = String(text).replace(ANSI_RE, "");
+  return `${plain.slice(0, Math.max(1, width - 1))}…`;
+}
+
+function panelLine(text, innerWidth) {
+  const content = shorten(text, innerWidth);
+  return `  ${color.muted("│")} ${content}${" ".repeat(Math.max(0, innerWidth - visibleLength(content)))} ${color.muted("│")}`;
+}
+
+function printPanel(lines, { accent = color.coral } = {}) {
+  const width = terminalWidth();
+  const innerWidth = width - 4;
+  console.log(`  ${accent("╭")}${accent("─".repeat(width - 2))}${accent("╮")}`);
+  for (const line of lines) console.log(panelLine(line, innerWidth));
+  console.log(`  ${accent("╰")}${accent("─".repeat(width - 2))}${accent("╯")}`);
+}
+
+function chip(label, value, accent = color.coral) {
+  return `${accent(` ${label.toUpperCase()} `)} ${color.cream(value)}`;
+}
+
+function contextBar(percent, segments = 18) {
+  const filled = Math.max(0, Math.min(segments, Math.round((percent / 100) * segments)));
+  return `${color.coral("━".repeat(filled))}${color.muted("─".repeat(segments - filled))}`;
+}
+
+function notice(message, tone = "teal") {
+  const marker = tone === "red" ? "×" : tone === "amber" ? "!" : "✓";
+  const paint = color[tone] || color.teal;
+  console.log(`  ${paint(marker)} ${message}`);
+}
+
 function printBanner(config) {
   console.log();
-  console.log(color.cyan("  ╭──────────────────────────────────────────────────────────╮"));
-  console.log(color.cyan("  │") + `  ${color.white("✦ Nexara")}${color.dim("  ·  AI in your terminal")}` + color.cyan("                  │"));
-  console.log(color.cyan("  │") + color.dim(`  model      ${modelLabel(config.selectedModel)}`) + color.cyan("                              │"));
-  console.log(color.cyan("  │") + color.dim(`  directory  ${displayPath()}`) + color.cyan("                    │"));
-  console.log(color.cyan("  ╰──────────────────────────────────────────────────────────╯"));
+  printPanel([
+    `${color.coral("✦")} ${color.cream("NEXARA")} ${color.muted("TERMINAL WORKSPACE")} ${color.dim(`v${CURRENT_VERSION}`)}`,
+    color.muted("A focused space to think, build, research, and ship."),
+    "",
+    `${color.muted("WORKSPACE  ")} ${color.cream(displayPath())}`,
+    `${chip("Model", modelLabel(config.selectedModel))}   ${chip("Effort", REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort, color.teal)}`,
+  ]);
   console.log();
-  console.log(color.dim("  Start with a task, or try one of these commands:"));
-  console.log(`  ${color.cyan("/help")} ${color.dim("commands")}   ${color.cyan("/model")} ${color.dim("change model")}   ${color.cyan("/status")} ${color.dim("session info")}   ${color.cyan("/quit")} ${color.dim("exit")}`);
-  console.log(color.dim("  Press Ctrl+C twice to exit.\n"));
+  console.log(color.cream("  What would you like to work on?"));
+  console.log(`  ${color.coral("/plan")} ${color.muted("map a project")}   ${color.coral("/research")} ${color.muted("investigate a topic")}   ${color.coral("/attach")} ${color.muted("bring in a file")}`);
+  console.log(color.dim("  Type / then press Tab for commands · Ctrl+C twice exits.\n"));
 }
 
 function printLoginScreen() {
   console.log();
-  console.log(color.cyan("  ╭──────────────────────────────────────────────╮"));
-  console.log(color.cyan("  │") + `  ${color.white("Sign in to Nexara")}${color.dim("                         ")} ` + color.cyan("│"));
-  console.log(color.cyan("  │") + color.dim("  Your account, models, and saved threads.      ") + color.cyan("│"));
-  console.log(color.cyan("  ╰──────────────────────────────────────────────╯"));
+  printPanel([
+    `${color.coral("✦")} ${color.cream("Welcome to Nexara")}`,
+    color.muted("Sign in once to keep your models, limits, and threads together."),
+    "",
+    `${color.coral("1")}  ${color.cream("Email and password")}      ${color.muted("private account sign-in")}`,
+    `${color.coral("2")}  ${color.cream("Continue with Google")}   ${color.muted("opens a secure browser window")}`,
+    `${color.coral("3")}  ${color.cream("Scan a QR code")}          ${color.muted("approve from Nexara on your phone")}`,
+  ]);
   console.log();
 }
 
 function printAssistantHeader(state, mode) {
   const modeLabel = mode ? ` · ${mode}` : "";
-  process.stdout.write(`\n${color.cyan("╭─")} ${color.white("Nexara")}${color.dim(`${modeLabel} · ${modelLabel(state.config.selectedModel)}`)}\n`);
+  process.stdout.write(`\n${color.coral("╭─")} ${color.cream("Nexara")} ${color.muted(`${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
 }
 
 function printSessionFooter(state) {
@@ -425,7 +487,7 @@ function printSessionFooter(state) {
   const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
   const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
   const thread = state.threadId ? `thread ${state.threadId.slice(0, 8)}` : "new thread";
-  process.stdout.write(color.dim(`\n╰─ ${thread} · ${formatTokens(ctxUsed)}/${formatTokens(ctxWindow)} context (${percent}%) · /compact to free space\n\n`));
+  process.stdout.write(`\n${color.coral("╰─")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}\n\n`);
 }
 
 function modelLabel(id) {
@@ -671,6 +733,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
   await ensureThread(state);
   const message = userMessage(trimmed, files);
   const quiet = Boolean(state.quiet);
+  let lastActivity = "";
   if (!quiet) {
     printAssistantHeader(state, mode);
   }
@@ -684,7 +747,11 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
     mode,
     goal,
     quiet,
-    onStatus: quiet ? undefined : (status) => diagnostic(status === "thinking" ? "thinking…" : "using tool…"),
+    onStatus: quiet ? undefined : (status) => {
+      if (status === lastActivity) return;
+      lastActivity = status;
+      diagnostic(`${color.coral("  ·")} ${color.muted(status === "thinking" ? "Thinking through it…" : "Using a tool…")}`);
+    },
     onText: quiet ? (text) => process.stdout.write(text) : undefined,
   });
   if (assistant.compacted && assistant.summary) {
@@ -740,7 +807,7 @@ async function handleSlash(state, line) {
       const model = resolveModel(argument);
       if (!model) { console.log(color.red(`No exact model match for “${argument}”.`)); printModels(state.config.selectedModel, argument); return true; }
       state.config = saveConfig({ selectedModel: model });
-      console.log(color.green(`Model switched to ${modelLabel(model)}.`));
+      notice(`Model switched to ${color.cream(modelLabel(model))}.`);
       return true;
     }
     case "/effort": {
@@ -756,7 +823,7 @@ async function handleSlash(state, line) {
         return true;
       }
       state.config = saveConfig({ selectedReasoningEffort: value });
-      console.log(color.green(`GPT-5.6 reasoning effort set to ${value}.`));
+      notice(`Reasoning effort set to ${color.cream(REASONING_EFFORT_LABELS[value])}.`);
       printEffortEstimates(state.config.selectedModel, contextOf(state.messages) + 1_600);
       return true;
     }
@@ -769,7 +836,7 @@ async function handleSlash(state, line) {
       }
       const file = await readAttachment(argument);
       state.pendingImages.push(file);
-      console.log(color.green(`Attached ${file.filename}. It will be sent with your next prompt.`));
+      notice(`Attached ${color.cream(file.filename)} · it will be sent with your next prompt.`);
       return true;
     }
     case "/new":
@@ -778,7 +845,7 @@ async function handleSlash(state, line) {
       state.messages = [];
       state.pendingImages = [];
       state.config = saveConfig({ lastThreadId: null });
-      console.log("Started a fresh conversation.");
+      notice("Started a fresh conversation.");
       return true;
     case "/resume": {
       const id = argument || state.config.lastThreadId;
@@ -787,7 +854,7 @@ async function handleSlash(state, line) {
       state.threadId = loaded.thread.id;
       state.messages = loaded.messages;
       state.config = saveConfig({ lastThreadId: state.threadId });
-      console.log(color.green(`Resumed: ${loaded.thread.title} (${state.threadId})`));
+      notice(`Resumed ${color.cream(loaded.thread.title)} · ${color.muted(state.threadId)}`);
       return true;
     }
     case "/threads": {
@@ -825,7 +892,7 @@ async function handleSlash(state, line) {
             parts: [{ type: "text", text: summaryText }],
           },
         ];
-        console.log(color.green("Conversation compacted — context window freed up."));
+        notice("Conversation compacted · context window freed up.");
       } catch (error) {
         console.log(color.red(error.message));
       }
@@ -876,7 +943,7 @@ async function interactive(config, auth, configPath, existingState) {
   const rl = readline.createInterface({
     input,
     output,
-    prompt: color.cyan("› "),
+    prompt: color.coral("╰─› "),
     completer: slashCompleter,
     crlfDelay: Infinity,
     terminal: Boolean(input.isTTY && output.isTTY),
