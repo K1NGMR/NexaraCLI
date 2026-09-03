@@ -408,6 +408,20 @@ function printLoginScreen() {
   console.log();
 }
 
+function printAssistantHeader(state, mode) {
+  const modeLabel = mode ? ` · ${mode}` : "";
+  process.stdout.write(`\n${color.cyan("╭─")} ${color.white("Nexara")}${color.dim(`${modeLabel} · ${modelLabel(state.config.selectedModel)}`)}\n`);
+}
+
+function printSessionFooter(state) {
+  const real = lastRealContext(state);
+  const ctxUsed = real ?? contextOf(state.messages);
+  const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
+  const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
+  const thread = state.threadId ? `thread ${state.threadId.slice(0, 8)}` : "new thread";
+  process.stdout.write(color.dim(`\n╰─ ${thread} · ${formatTokens(ctxUsed)}/${formatTokens(ctxWindow)} context (${percent}%) · /compact to free space\n\n`));
+}
+
 function modelLabel(id) {
   return MODELS.find(([modelId]) => modelId === id)?.[1] || id;
 }
@@ -636,11 +650,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
   const message = userMessage(trimmed, files);
   const quiet = Boolean(state.quiet);
   if (!quiet) {
-    printEffortEstimates(
-      state.config.selectedModel,
-      contextOf([...state.messages, message]) + 1_600,
-    );
-    process.stdout.write(color.cyan("› ") + color.dim(" "));
+    printAssistantHeader(state, mode);
   }
   const assistant = await sendChat({
     auth: state.auth,
@@ -676,12 +686,7 @@ async function runPrompt(state, text, { mode, goal, files = [] } = {}) {
   state.pendingImages = [];
   if (assistant.usage) state.lastUsage = assistant.usage;
   if (!quiet) {
-    // Real provider usage wins — it is exactly what the model received last
-    // turn. The char heuristic only fills in before the first real number.
-    const ctxUsed = lastRealContext(state) ?? contextOf(state.messages);
-    const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
-    const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
-    process.stdout.write(color.dim(`\n[ctx ${formatTokens(ctxUsed)} / ${formatTokens(ctxWindow)} (${percent}%) — /compact frees this]\n`));
+    printSessionFooter(state);
   }
   return assistant.text;
 }
@@ -809,9 +814,16 @@ async function handleSlash(state, line) {
       const real = lastRealContext(state);
       const ctxUsed = real ?? contextOf(state.messages);
       const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
-      console.log(
-        `Signed in: ${user?.email || "no"}\nModel: ${modelLabel(state.config.selectedModel)}\nThread: ${state.threadId || "none"}\nPending files: ${state.pendingImages.length}\nContext: ${formatTokens(ctxUsed)} / ${formatTokens(ctxWindow)} (${Math.min(100, Math.round((ctxUsed / ctxWindow) * 100))}%)${real ? " [exact]" : " [estimate]"}`,
-      );
+      console.log();
+      console.log(color.cyan("  Session"));
+      console.log(`  ${color.dim("account    ")} ${user?.email || "not signed in"}`);
+      console.log(`  ${color.dim("directory  ")} ${displayPath()}`);
+      console.log(`  ${color.dim("model      ")} ${modelLabel(state.config.selectedModel)}`);
+      console.log(`  ${color.dim("effort     ")} ${REASONING_EFFORT_LABELS[state.config.selectedReasoningEffort] || state.config.selectedReasoningEffort}`);
+      console.log(`  ${color.dim("thread     ")} ${state.threadId || "new thread"}`);
+      console.log(`  ${color.dim("files      ")} ${state.pendingImages.length}`);
+      console.log(`  ${color.dim("context    ")} ${formatTokens(ctxUsed)} / ${formatTokens(ctxWindow)} (${Math.min(100, Math.round((ctxUsed / ctxWindow) * 100))}%)${real ? " · exact" : " · estimate"}`);
+      console.log();
       return true;
     }
     case "/think": await runPrompt(state, argument, { mode: "think", files: state.pendingImages }); return true;
