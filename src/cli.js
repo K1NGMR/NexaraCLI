@@ -456,130 +456,55 @@ const color = {
   magenta: rgb(204, 120, 92),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
-// Pixel-art frames for the Nexara Petal. Each character is one terminal pixel;
-// the renderer below paints it as a pair of true-colour spaces so the mascot
-// remains crisp in Windows Terminal and other ANSI-capable terminals.
-const PETAL_PIXEL_FRAMES = [
-  [
-    "......M......",
-    ".....MMM.....",
-    "....MPPPM....",
-    ".BBMPPPPPMBB.",
-    "BBPPPPWPPPPBB",
-    ".BBPPWWWPPBB.",
-    "..BPPWWWPPB..",
-    "...BPPPPPB...",
-    "....BBBBB....",
-    ".....BBB.....",
-    "......B......",
-  ],
-  [
-    ".....MMM.....",
-    "....MPPPM....",
-    "...MPVVVPM...",
-    ".BBPPVVVVPPBB",
-    "BBPPPVWVVPPBB",
-    ".BBPPWWWPPBB.",
-    "..BPPWWWPPB..",
-    "...BPPPPPB...",
-    "....BBBBB....",
-    ".....BBB.....",
-    "......B......",
-  ],
-  [
-    "......M......",
-    ".....MPM.....",
-    "....MPPPM....",
-    ".BBMPPPPPMBB.",
-    "BBPPPPWWWPPBB",
-    ".BBPPWWWWPBB.",
-    "..BPPWWWPPB..",
-    "...BPPPPPB...",
-    "....BBBBB....",
-    ".....BBB.....",
-    "......B......",
-  ],
-  [
-    "......M......",
-    ".....MMM.....",
-    "....MPPPM....",
-    "..BBMPPPPMBB.",
-    "BBPPPPWPPPPBB",
-    "..BBPWWWPPBB.",
-    "...BPPWWWPPB.",
-    "....BPPPPPB..",
-    ".....BBBBB...",
-    "......BBB....",
-    ".......B.....",
-  ],
-  [
-    "......M......",
-    ".....MMM.....",
-    "....MPPPM....",
-    ".BBMPPPPPMBB.",
-    "BBPPPPWWPPPPB",
-    ".BBPPWWWWPBB.",
-    "..BPPWWWPPB..",
-    "...BPPPPPB...",
-    "....BBBBB....",
-    ".....BBB.....",
-    "......B......",
-  ],
-  [
-    ".....MMM.....",
-    "....MPPPM....",
-    "...MPVVVPM...",
-    ".BBPPVVVVPPBB",
-    "BBPPPVWVVPPBB",
-    ".BBPPWWWPPBB.",
-    "..BPPWWWPPB..",
-    "...BPPPPPB...",
-    "....BBBBB....",
-    ".....BBB.....",
-    "......B......",
-  ],
-  [
-    "......M......",
-    ".....MMM.....",
-    "....MPPPM....",
-    ".BBMPPPPPMBB.",
-    "BBPPPPWPPPPBB",
-    ".BBPPWWWPPBB.",
-    "..BPPWWWPPB..",
-    "...BPPPPPB...",
-    "....BBBBB....",
-    ".....BBB.....",
-    "......B......",
-  ],
-  [
-    "......M......",
-    ".....MPM.....",
-    "....MPPPM....",
-    ".BBMPPPPPMBB.",
-    "BBPPPPWWPPPPB",
-    ".BBPPWWWWPBB.",
-    "..BPPWWWPPB..",
-    "...BPPPPPB...",
-    "....BBBBB....",
-    ".....BBB.....",
-    "......B......",
-  ],
+// A terminal-safe raster sampled from the Nexara Petal logo. Each character
+// is a source-image colour bucket; the renderer paints it as a pair of
+// true-colour spaces so the mark remains crisp in Windows Terminal and other
+// ANSI-capable terminals. This replaces the old invented puppet silhouette.
+const NEXARA_LOGO_FRAME = [
+  "..............P..............",
+  ".............PPP.............",
+  "............PPPPP............",
+  "...........PPPPPPP...........",
+  "..........PPPPPPPPP..........",
+  ".VVVVVVVPPPPPPPPPPPPPPPPPPVV.",
+  ".VVBBVVVVVPPPPPPPPPVVVVVVVVW.",
+  "..BBBBBBVVPMMPWPMMPVVVVVVVW..",
+  "...VBBBBBBBWMMWMWWPPVVVVVW...",
+  "....MMMMMMMWWWWWWPPVVVVVV....",
+  "....WVVBBBVWWWWWWPPPVVVVW....",
+  "...WVVBBBVVWWWWWWWPVVVVVV....",
+  "..WVVBBBBBVMMPWPMMVVVVBBBV...",
+  "..BBBBBBBBPMPBBVPMPBBBBBBBB..",
+  ".BBBBBBBBBVBBBBBBVVBBBBBBBBB.",
+  ".WWWWWWWW.BBBBBBBBB.WWWWWWWW.",
+  "...........BBBBBBB...........",
+  "............BBBBB............",
+  ".............BBB.............",
+  "..............W..............",
 ];
 
+// The gentle pulse changes colour intensity only; the logo geometry never
+// jumps, stretches, or morphs into a different character while loading.
+const PETAL_PIXEL_FRAMES = [NEXARA_LOGO_FRAME, NEXARA_LOGO_FRAME, NEXARA_LOGO_FRAME];
+
 const PIXEL_COLORS = {
-  B: [54, 108, 232],
-  P: [115, 67, 224],
-  V: [181, 55, 235],
-  M: [235, 101, 213],
+  B: [63, 122, 250],
+  P: [151, 50, 239],
+  V: [105, 88, 239],
+  M: [239, 96, 216],
   W: [250, 249, 245],
 };
 
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 
-function pixelCell(value) {
+function pixelCell(value, frameIndex = 0) {
   const rgbValue = PIXEL_COLORS[value];
   if (!rgbValue) return "  ";
-  return `\u001b[48;2;${rgbValue[0]};${rgbValue[1]};${rgbValue[2]}m  \u001b[0m`;
+  const pulse = frameIndex % 3 === 1 ? 1.04 : 1;
+  const red = Math.min(255, Math.round(rgbValue[0] * pulse));
+  const green = Math.min(255, Math.round(rgbValue[1] * pulse));
+  const blue = Math.min(255, Math.round(rgbValue[2] * pulse));
+  return `\u001b[48;2;${red};${green};${blue}m  \u001b[0m`;
 }
 
 function diagnostic(text) {
@@ -923,15 +848,25 @@ async function saveServerArtifact(state, name, output) {
   return filePath;
 }
 
-function mascotPixelLines(frameIndex, label = "") {
+function logoPixelLines(frameIndex = 0, { compact = false, label = "" } = {}) {
   const frame = PETAL_PIXEL_FRAMES[frameIndex % PETAL_PIXEL_FRAMES.length];
+  const sourceRows = compact ? frame.filter((_, index) => index % 2 === 0) : frame;
+  const sourceColumns = compact ? 2 : 1;
   const width = Math.max(...frame.map((line) => line.length));
-  const lines = frame.map((line) => {
-    const padded = line.padStart(Math.floor((width + line.length) / 2), ".").padEnd(width, ".");
-    return `  ${[...padded].map(pixelCell).join("")}`;
+  const lines = sourceRows.map((line) => {
+    const padded = line.padEnd(width, ".");
+    const pixels = [];
+    for (let index = 0; index < padded.length; index += sourceColumns) {
+      pixels.push(pixelCell(padded[index], frameIndex));
+    }
+    return `  ${pixels.join("")}`;
   });
   if (label) lines.push(`  ${color.muted(label)}`);
   return lines;
+}
+
+function mascotPixelLines(frameIndex, label = "") {
+  return logoPixelLines(frameIndex, { label });
 }
 
 function pause(milliseconds) {
@@ -943,16 +878,25 @@ async function animateMascot(label = "Waking up your workspace") {
     return;
   }
   const frameLines = mascotPixelLines(0, label);
-  output.write("\u001b[?25l");
-  for (let index = 0; index < PETAL_PIXEL_FRAMES.length * 2; index += 1) {
-    if (index > 0) output.write(`\u001b[${frameLines.length - 1}A`);
+  const draw = (index) => {
     const lines = mascotPixelLines(index, label);
-    output.write(lines.map((line) => `\u001b[2K\r${line}`).join("\n"));
-    await pause(95);
+    // Always redraw from the absolute home position. Relative cursor-up
+    // caused the old mascot to push the actual CLI hundreds of rows down.
+    output.write("\u001b[H");
+    lines.forEach((line, lineIndex) => {
+      output.write(`\u001b[2K\r${line}${lineIndex === lines.length - 1 ? "" : "\n"}`);
+    });
+  };
+  output.write("\u001b[?25l");
+  for (let index = 0; index < PETAL_PIXEL_FRAMES.length * 3; index += 1) {
+    draw(index);
+    await pause(120);
   }
-  output.write(`\u001b[${frameLines.length - 1}A`);
-  output.write(frameLines.map(() => "\u001b[2K\r").join("\n"));
-  output.write("\u001b[?25h\n");
+  output.write("\u001b[H");
+  frameLines.forEach((_, lineIndex) => {
+    output.write(`\u001b[2K\r${lineIndex === frameLines.length - 1 ? "" : "\n"}`);
+  });
+  output.write("\u001b[H\u001b[?25h");
 }
 
 async function animateText(text, paint = color.muted) {
@@ -970,7 +914,9 @@ async function animateText(text, paint = color.muted) {
 async function printBanner(config, user = null) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
   const account = user?.email || "Nexara account";
-  console.log();
+  // Keep the logo visible after the loading animation and start the settled
+  // interface at the top of the cleared terminal.
+  console.log(logoPixelLines(1, { compact: true }).join("\n"));
   console.log(`${color.coral("✦")} ${color.cream("Nexara")} ${color.muted(`v${CURRENT_VERSION}`)}`);
   console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted("with")} ${color.cream(effort)} ${color.muted(`effort · ${account}`)}`);
   console.log(`  ${color.muted(displayPath())}`);
