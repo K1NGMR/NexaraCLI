@@ -675,7 +675,10 @@ function clearTerminalForSession() {
   // Clear the visible viewport and scrollback so every Nexara session starts
   // as a clean workspace, while leaving the user's shell available on exit.
   // Also reset mouse tracking left behind by an older/crashed CLI process.
-  output.write("\u001b[?1006l\u001b[?1000l\u001b[3J\u001b[2J\u001b[H");
+  // console.clear covers Windows hosts that ignore scrollback erasure, while
+  // the explicit VT sequence resets the viewport and terminal modes.
+  console.clear();
+  output.write("\u001b[0m\u001b[?1006l\u001b[?1000l\u001b[3J\u001b[2J\u001b[H");
 }
 
 function shorten(text, width) {
@@ -1186,10 +1189,9 @@ function printTurnComplete(startedAt) {
 
 function printSessionFooter(state) {
   const activity = composerActivityLine(state);
-  if (!activity) return 0;
   // Activity is the only persistent chrome above the input. Idle sessions
   // stay quiet, keeping attention on the command box and the transcript.
-  process.stdout.write(`  ${activity}\n`);
+  process.stdout.write(activity ? `  ${activity}\n` : "\n");
   return 1;
 }
 
@@ -2566,8 +2568,6 @@ async function interactive(config, auth, configPath, existingState) {
   // Keep its height so a submitted line can remove it before the next turn
   // is committed, leaving the transcript growing down from the top.
   let composerFooterLines = 0;
-  let composerMounted = false;
-  let composerPromptActive = false;
   let slashSuggestionLines = 0;
   let slashSuggestionIndex = -1;
   let slashSuggestionInput = null;
@@ -2579,24 +2579,13 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   function clearComposerFooter() {
-    if (!composerMounted || !output.isTTY) {
+    if (!composerFooterLines || !output.isTTY) {
       state.composerFooterLines = 0;
       return;
     }
-    // While a prompt is live readline keeps the cursor on the input row; once
-    // it submits, the cursor advances to the next row. Handle both positions
-    // so output never leaves a fragment of the dark input rectangle behind.
+    // Readline moves to the blank row below the submitted prompt before this
+    // runs. Erase only the footer and input rows; never touch older output.
     const rows = composerFooterLines + 1;
-    if (composerPromptActive) {
-      output.write("\r\u001b[2K");
-      for (let index = 0; index < composerFooterLines; index += 1) output.write("\u001b[1A\r\u001b[2K");
-      output.write("\u001b[0m");
-      composerFooterLines = 0;
-      state.composerFooterLines = 0;
-      composerMounted = false;
-      composerPromptActive = false;
-      return;
-    }
     output.write(`\u001b[${rows}A`);
     for (let index = 0; index < rows; index += 1) {
       output.write(`\r\u001b[2K${index < rows - 1 ? "\u001b[1B" : ""}`);
@@ -2608,8 +2597,6 @@ async function interactive(config, auth, configPath, existingState) {
     output.write("\u001b[0m");
     composerFooterLines = 0;
     state.composerFooterLines = 0;
-    composerMounted = false;
-    composerPromptActive = false;
   }
 
   function renderComposerFooter() {
@@ -2804,18 +2791,15 @@ async function interactive(config, auth, configPath, existingState) {
     output.write("\r\u001b[48;2;54;49;45m\u001b[2K\u001b[0m\r");
     rl.setPrompt("\u001b[48;2;54;49;45m\u001b[38;2;250;249;245m  ❯ \u001b[0m");
     rl.prompt();
-    composerMounted = true;
-    composerPromptActive = true;
   }
 
   // Redraw only when the composer is empty. This preserves readline's cursor
   // and any text the user is typing while still allowing an idle composer to
   // show the processing and thinking animation.
   function refreshComposer() {
-    if (closing || rl.closed || rl.line || composerMounted) return;
-    clearComposerFooter();
-    renderComposerFooter();
-    rl.prompt(true);
+    // Transcript integrity takes priority over animation. The next composer
+    // mount shows the current activity frame without cursor repositioning.
+    return;
   }
 
   state.refreshComposer = refreshComposer;
@@ -2858,7 +2842,6 @@ async function interactive(config, auth, configPath, existingState) {
 
   const onLine = (raw) => {
     if (closing || questionActive || state.modalOpen) return;
-    composerPromptActive = false;
     const line = raw.trim();
     clearSlashSuggestions(true);
     clearComposerFooter();
