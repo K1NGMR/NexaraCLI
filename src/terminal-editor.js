@@ -72,10 +72,21 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     const available = Math.max(1, columns - currentPrompt.length - 3);
     const maxRows = Math.max(1, Number(rows()) || 3);
     const chunks = [];
-    for (let index = 0; index < line.length; index += available) chunks.push(line.slice(index, index + available));
+    let cursorRow = 0;
+    let cursorCol = 0;
+    let offset = 0;
+    for (const segment of line.split("\n")) {
+      if (!segment.length) chunks.push("");
+      else for (let index = 0; index < segment.length; index += available) chunks.push(segment.slice(index, index + available));
+      const segmentEnd = offset + segment.length;
+      if (cursor >= offset && cursor <= segmentEnd) {
+        const local = cursor - offset;
+        cursorRow = chunks.length - 1;
+        cursorCol = Math.min(available, local % available);
+      }
+      offset = segmentEnd + 1;
+    }
     if (!chunks.length) chunks.push("");
-    const cursorRow = Math.min(chunks.length - 1, Math.floor(cursor / available));
-    const cursorCol = Math.min(available, cursor - cursorRow * available);
     const firstRow = Math.min(
       Math.max(0, cursorRow - maxRows + 1),
       Math.max(0, chunks.length - maxRows),
@@ -118,7 +129,14 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     const name = String(key.name || "").toLowerCase();
     const sequence = key.sequence || str || "";
     if (key.ctrl && name === "c") return;
-    if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") { submit(); return; }
+    if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
+      if (key.shift) {
+        line = `${line.slice(0, cursor)}\n${line.slice(cursor)}`;
+        cursor += 1;
+        render();
+      } else submit();
+      return;
+    }
     if (name === "backspace") {
       if (cursor > 0) { line = `${line.slice(0, cursor - 1)}${line.slice(cursor)}`; cursor -= 1; render(); }
       return;

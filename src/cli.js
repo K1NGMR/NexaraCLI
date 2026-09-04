@@ -880,7 +880,17 @@ function printToolCall(call, { streamJson = false } = {}) {
   const name = String(call?.name || "tool");
   const preview = toolArgumentPreview(name, call?.arguments || {});
   if (streamJson) return;
-  console.log(`  ${color.coral("╭─")} ${color.cream(name)} ${color.dim(preview ? `· ${preview}` : "")}`);
+  const verb = ({
+    ReadFile: "Reading",
+    ListFiles: "Listing",
+    SearchFiles: "Searching",
+    RunCommand: "Running",
+    WriteFile: "Writing",
+    EditFile: "Editing",
+    CheckPort: "Checking",
+    ask_question: "Asking",
+  })[name] || `Using ${name}`;
+  console.log(`  ${color.coral("◇")} ${color.cream(verb)}${color.dim(preview ? ` · ${preview}` : "")}`);
 }
 
 function printToolResult(name, result, { error = false, streamJson = false } = {}) {
@@ -893,7 +903,7 @@ function printToolResult(name, result, { error = false, streamJson = false } = {
   // capped the rest at eight lines for a small allow-list, which made tools
   // such as ListFiles look as if they returned only one result. Render every
   // returned line, wrapping long lines to the current terminal width.
-  console.log(`  ${color.muted("╰─")} ${label} ${color.muted(String(name))}`);
+  console.log(`  ${label} ${color.muted(`${name} ${error ? "failed" : "done"}`)}`);
   for (const line of lines) console.log(`     ${color.dim(line)}`);
 }
 
@@ -1145,31 +1155,19 @@ async function animateText(text, paint = color.muted) {
 }
 
 async function printBanner(config, user = null, { resumed = false } = {}) {
-  const maxLogoWidth = Math.max(38, terminalWidth() - 2);
-  // On a fresh session, keep the welcome mark visually connected to the
-  // composer instead of pinning it to the top of an otherwise-empty window.
-  // Once a conversation exists, transcript history owns that vertical space.
-  if (!resumed && output.isTTY) {
-    const rows = Math.max(18, Number(output.rows) || 24);
-    const spacerRows = Math.max(0, rows - 18);
-    for (let index = 0; index < spacerRows; index += 1) console.log();
-  }
+  // Keep startup compact: the transcript and composer should own the screen.
+  // The large reference mark is reserved for unusually tall terminals so it
+  // never pushes the first prompt below the fold in PowerShell/CMD.
+  const showMark = !resumed && Number(output.rows || 0) >= 48 && terminalWidth() >= 96;
   console.log();
-  // A terminal-native rendition of the reference's large outlined masthead.
-  // Keep its green edge treatment while using Nexara CLI as the only brand.
-  if (maxLogoWidth < 96) {
-    console.log(`  ${color.neon("╔═╗ ╔═╗ ═╗ ╔═╗ ╦═╗ ╔═╗   ╔═╗ ╦  ╦")}`);
-    console.log(`  ${color.neon("║ ║ ║╣   ║ ╠═╣ ╠╦╝ ╠═╣   ║   ║  ║")}`);
-    console.log(`  ${color.neon("╚═╝ ╚═╝ ═╝ ╩ ╩ ╩╚═ ╩ ╩   ╚═╝ ╩═╝╩")}`);
+  if (showMark) {
+    for (const row of NEXARA_CLI_LOGO) console.log(`  ${color.neon(row)}`);
+    console.log();
   } else {
-    for (const row of NEXARA_CLI_LOGO) {
-      console.log(`  ${color.neon(row)}`);
-    }
+    console.log(`  ${color.coral("✦")} ${color.cream("NEXARA CLI")} ${color.muted("· AI coding agent")}`);
   }
-  console.log();
-  console.log(`  ${color.terminalWhite("Nexara CLI will run commands on your behalf to help you build.")}`);
-  console.log();
-  console.log(`  ${color.terminalWhite("Directory")} ${color.muted(displayPath())}${user?.email ? ` ${color.muted("·")} ${color.muted(user.email)}` : ""}`);
+  console.log(`  ${color.muted("Directory")} ${color.cream(displayPath())}${user?.email ? ` ${color.dim("·")} ${color.muted(user.email)}` : ""}`);
+  console.log(color.dim("  Type a prompt, /help for commands, or Esc Esc to quit."));
   console.log();
 }
 
