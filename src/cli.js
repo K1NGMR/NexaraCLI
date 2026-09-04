@@ -503,12 +503,12 @@ function setComposerActivity(state, status) {
   if (!state.interactive) return;
   state.composerActivity = status || null;
   state.composerActivityFrame = 0;
-  state.refreshComposer?.();
 }
 
 function startComposerActivityAnimation(state) {
   if (!state.interactive || !input.isTTY || !output.isTTY) return () => {};
-  setComposerActivity(state, "processing");
+  state.composerActivity = "processing";
+  state.composerActivityFrame = 0;
   const timer = setInterval(() => {
     state.composerActivityFrame = Number(state.composerActivityFrame || 0) + 1;
     state.refreshComposer?.();
@@ -1007,12 +1007,10 @@ async function animateText(text, paint = color.muted) {
 
 async function printBanner(config, user = null) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
-  const account = user?.email || "Nexara account";
   console.log();
-  console.log(`  ${nexaraWordmark()} ${color.muted(`CLI ${CURRENT_VERSION}`)}`);
-  console.log(`  ${color.cream("What would you like to build?")}`);
-  console.log(`  ${color.muted("Model")} ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} reasoning`)}`);
-  console.log(`  ${color.muted("Workspace")} ${color.cream(displayPath())} ${color.muted(`· ${account}`)}`);
+  console.log(`  ${color.coral("▟█▙")}  ${color.cream("Nexara CLI")} ${color.muted(`v${CURRENT_VERSION}`)}`);
+  console.log(`  ${color.coral("▜█▛")}  ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort`)}`);
+  console.log(`   ${color.coral("▀")}   ${color.muted(displayPath())}`);
   console.log();
 }
 
@@ -1187,23 +1185,12 @@ function printTurnComplete(startedAt) {
 }
 
 function printSessionFooter(state) {
-  const real = lastRealContext(state);
-  const ctxUsed = real ?? contextOf(state.messages);
-  const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
-  const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
-  const taskInfo = state.todos?.length
-    ? `${color.coral("●")} ${color.cream(todoSummary(state.todos))}`
-    : `${color.teal("●")} ${color.cream("Ready")}`;
-  const queueInfo = state.pendingMessages?.length ? ` ${color.amber("·")} ${color.cream(`${state.pendingMessages.length} queued`)}` : "";
   const activity = composerActivityLine(state);
-  const lines = [activity
-    ? `  ${activity} ${color.muted(`· ${percent}% context`)}`
-    : `  ${taskInfo}${queueInfo} ${color.muted(`· ${percent}% context · / for commands`)}`];
-  // The footer is mounted immediately after the assistant header. A leading
-  // newline here becomes an untracked spacer row; when the footer is erased
-  // after a response, that row remains and makes the answer look detached.
-  process.stdout.write(`${lines.join("\n")}\n`);
-  return lines.length;
+  if (!activity) return 0;
+  // Activity is the only persistent chrome above the input. Idle sessions
+  // stay quiet, keeping attention on the command box and the transcript.
+  process.stdout.write(`  ${activity}\n`);
+  return 1;
 }
 
 function renderTerminalInlineMarkdown(value, colorize = true) {
@@ -2050,8 +2037,8 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     };
     state.toggleThinking = toggleThinking;
     state.setThinkingMouse?.(true);
-    onStart?.();
     const stopComposerAnimation = startComposerActivityAnimation(state);
+    onStart?.();
     const serverArtifacts = [];
     const controller = new AbortController();
     const previousCancel = state.cancelCurrent;
@@ -2579,6 +2566,8 @@ async function interactive(config, auth, configPath, existingState) {
   // Keep its height so a submitted line can remove it before the next turn
   // is committed, leaving the transcript growing down from the top.
   let composerFooterLines = 0;
+  let composerMounted = false;
+  let composerPromptActive = false;
   let slashSuggestionLines = 0;
   let slashSuggestionIndex = -1;
   let slashSuggestionInput = null;
@@ -2590,15 +2579,24 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   function clearComposerFooter() {
-    if (!composerFooterLines || !output.isTTY) {
+    if (!composerMounted || !output.isTTY) {
       state.composerFooterLines = 0;
       return;
     }
-    // After readline accepts a line, the cursor is one row below the prompt.
-    // Erase exactly the footer and prompt rows. `ESC[J` used to clear from
-    // there to the bottom of the terminal, which made the conversation appear
-    // to vanish whenever a queued message or tool event remounted the footer.
+    // While a prompt is live readline keeps the cursor on the input row; once
+    // it submits, the cursor advances to the next row. Handle both positions
+    // so output never leaves a fragment of the dark input rectangle behind.
     const rows = composerFooterLines + 1;
+    if (composerPromptActive) {
+      output.write("\r\u001b[2K");
+      for (let index = 0; index < composerFooterLines; index += 1) output.write("\u001b[1A\r\u001b[2K");
+      output.write("\u001b[0m");
+      composerFooterLines = 0;
+      state.composerFooterLines = 0;
+      composerMounted = false;
+      composerPromptActive = false;
+      return;
+    }
     output.write(`\u001b[${rows}A`);
     for (let index = 0; index < rows; index += 1) {
       output.write(`\r\u001b[2K${index < rows - 1 ? "\u001b[1B" : ""}`);
@@ -2607,8 +2605,11 @@ async function interactive(config, auth, configPath, existingState) {
     // transcript row so the next user/assistant turn is committed directly
     // below the previous content instead of after a block of blank rows.
     if (rows > 1) output.write(`\u001b[${rows - 1}A`);
+    output.write("\u001b[0m");
     composerFooterLines = 0;
     state.composerFooterLines = 0;
+    composerMounted = false;
+    composerPromptActive = false;
   }
 
   function renderComposerFooter() {
@@ -2797,15 +2798,21 @@ async function interactive(config, auth, configPath, existingState) {
     if (closing || rl.closed) return;
     clearComposerFooter();
     renderComposerFooter();
-    rl.setPrompt(color.coral("  ❯ "));
+    // Paint the entire terminal row using Erase Line under a dark surface
+    // color rather than trusting `stdout.columns` (which can be wrong in
+    // Windows Terminal). This is the clean, full-width command rectangle.
+    output.write("\r\u001b[48;2;54;49;45m\u001b[2K\u001b[0m\r");
+    rl.setPrompt("\u001b[48;2;54;49;45m\u001b[38;2;250;249;245m  ❯ \u001b[0m");
     rl.prompt();
+    composerMounted = true;
+    composerPromptActive = true;
   }
 
   // Redraw only when the composer is empty. This preserves readline's cursor
   // and any text the user is typing while still allowing an idle composer to
   // show the processing and thinking animation.
   function refreshComposer() {
-    if (closing || rl.closed || rl.line) return;
+    if (closing || rl.closed || rl.line || composerMounted) return;
     clearComposerFooter();
     renderComposerFooter();
     rl.prompt(true);
@@ -2851,6 +2858,7 @@ async function interactive(config, auth, configPath, existingState) {
 
   const onLine = (raw) => {
     if (closing || questionActive || state.modalOpen) return;
+    composerPromptActive = false;
     const line = raw.trim();
     clearSlashSuggestions(true);
     clearComposerFooter();
