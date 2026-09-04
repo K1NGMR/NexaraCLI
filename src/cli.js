@@ -1239,10 +1239,27 @@ function printTurnComplete(startedAt) {
 
 function printSessionFooter(state) {
   const activity = composerActivityLine(state);
-  // Activity is the only persistent chrome above the input. Idle sessions
-  // stay quiet, keeping attention on the command box and the transcript.
-  process.stdout.write(activity ? `  ${activity}\n` : "\n");
-  return 1;
+  const width = terminalWidth();
+  const rule = color.muted("─".repeat(Math.max(1, width)));
+  let statusLine;
+  if (activity) {
+    statusLine = `  ${activity}`;
+  } else {
+    const used = lastRealContext(state) ?? contextOf(state.messages || []);
+    const windowSize = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
+    const percent = Math.min(100, Math.round((used / windowSize) * 100));
+    const lead = state.busy ? color.coral("●") : color.teal("●");
+    const label = state.busy ? "Working" : "Ready";
+    statusLine = `  ${lead} ${color.muted(label)} ${color.dim("·")} ${color.muted(`${percent}% context`)} ${color.dim("·")} ${color.muted(modelLabel(state.config.selectedModel))}`;
+  }
+  // Frame the input with a rule above and a status line below it so the
+  // composer reads as a box (matching Claude CLI/Codex CLI) instead of a
+  // bare single-line prompt, without needing a scroll region or absolute
+  // cursor addressing -- everything here is a plain line print, erased
+  // later with an ordinary relative cursor-up-and-clear (see
+  // clearComposerFooter), so it renders the same in any terminal.
+  process.stdout.write(`${rule}\n${statusLine}\n`);
+  return 2;
 }
 
 function renderTerminalInlineMarkdown(value, colorize = true) {
@@ -2073,7 +2090,12 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       streamJson: machine,
       // The anchored rail shows activity in its own footer, so the inline
       // spinner stays quiet in interactive mode to avoid a second animation.
-      stableComposer: Boolean(state.interactive),
+      // Was only suppressed here on the assumption the anchored rail showed
+      // activity separately; that rail is no longer used (see the
+      // fixedComposer note in interactive()), so this inline single-line
+      // spinner -- already proven safe for one-shot/non-interactive runs --
+      // is now the activity indicator for interactive sessions too.
+      stableComposer: false,
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
     });
     state.thinkingText = "";
@@ -2658,7 +2680,20 @@ async function interactive(config, auth, configPath, existingState) {
   // position it was actually drawn.
   let railTop = null;
   let railRows = null;
-  const fixedComposer = Boolean(input.isTTY && output.isTTY);
+  // Confirmed with real data (process.stdout.rows/columns = 51/209, both
+  // correct for a fullscreen window) that the missing bottom rule/footer was
+  // never a row-count problem -- every row the anchored rail computes falls
+  // well inside that range. Three attempts targeting the DECSTBM scroll
+  // region (a resize-safe redraw, drawing before/after setting the region,
+  // a row safety margin) still left it broken. The user's terminal here is
+  // legacy Windows PowerShell console (conhost.exe), not Windows Terminal --
+  // conhost's DECSTBM support is known to be unreliable, which is a
+  // different class of problem no amount of row/column math fixes. Always
+  // use the simple relative-footer layout instead (draw the box using
+  // ordinary line prints and relative cursor-up motions -- see
+  // renderComposerFooter/clearComposerFooter below), which needs no scroll
+  // region and works the same in any terminal.
+  const fixedComposer = false;
   // Match terminalWidth()'s margin below: writing to a terminal's literal
   // last row is exactly as unreliable on Windows as writing to its literal
   // last column. Without this, output.rows can be reported 1-2 rows taller
