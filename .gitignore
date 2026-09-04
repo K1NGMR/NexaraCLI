@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache-ui-check/
 *.tgz
 .env
 .env.*
