@@ -1,6 +1,6 @@
 {
   "name": "nexara-cli",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "Nexara AI in your terminal — interactive chat, models, images, and scripts.",
   "type": "module",
   "bin": {

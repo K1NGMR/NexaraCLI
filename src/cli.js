@@ -469,6 +469,8 @@ const ANSI_RE = /\u001b\[[0-9;]*m/g;
 const PETAL_MARK_FRAMES = ["✦", "✧", "✦", "·"];
 
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
+const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
+const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
@@ -484,6 +486,38 @@ function activityText(status) {
     processing: "Processing shared context…",
     complete: "Done",
   })[status] || String(status || "Working…");
+}
+
+function composerActivityLine(state) {
+  const status = String(state.composerActivity || "");
+  if (!status) return null;
+  const frame = Number(state.composerActivityFrame || 0);
+  if (status === "thinking") {
+    return `${color.amber(THINKING_FRAMES[frame % THINKING_FRAMES.length])} ${color.muted("Thinking — reasoning in progress")}`;
+  }
+  const label = status === "writing" ? "Writing response" : activityText(status);
+  return `${color.coral(PROCESSING_FRAMES[frame % PROCESSING_FRAMES.length])} ${color.muted(label)}`;
+}
+
+function setComposerActivity(state, status) {
+  if (!state.interactive) return;
+  state.composerActivity = status || null;
+  state.composerActivityFrame = 0;
+  state.refreshComposer?.();
+}
+
+function startComposerActivityAnimation(state) {
+  if (!state.interactive || !input.isTTY || !output.isTTY) return () => {};
+  setComposerActivity(state, "processing");
+  const timer = setInterval(() => {
+    state.composerActivityFrame = Number(state.composerActivityFrame || 0) + 1;
+    state.refreshComposer?.();
+  }, 360);
+  return () => {
+    clearInterval(timer);
+    state.composerActivity = null;
+    state.composerActivityFrame = 0;
+  };
 }
 
 function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, stableComposer = false } = {}) {
@@ -1168,7 +1202,7 @@ function printSessionFooter(state) {
     `  ${rule}`,
     `  ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted(`· ${effort} effort · ${threadInfo}`)}`,
     `  ${taskInfo}${queueInfo} ${color.muted("·")} ${color.muted(`${contextBar(percent)} ${percent}% context`)}`,
-    `  ${state.busy ? color.coral("✦") : color.muted("↵")} ${color.muted(state.busy ? "Working — keep typing to queue a message" : "Send · / commands · Esc Esc exits")}`,
+    `  ${composerActivityLine(state) || `${color.muted("↵")} ${color.muted("Send · / commands · Esc Esc exits")}`}`,
   ];
   // The footer is mounted immediately after the assistant header. A leading
   // newline here becomes an untracked spacer row; when the footer is erased
@@ -2022,6 +2056,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     state.toggleThinking = toggleThinking;
     state.setThinkingMouse?.(true);
     onStart?.();
+    const stopComposerAnimation = startComposerActivityAnimation(state);
     const serverArtifacts = [];
     const controller = new AbortController();
     const previousCancel = state.cancelCurrent;
@@ -2036,6 +2071,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
         if (!responseStarted) {
           responseStarted = true;
           activity.set("writing");
+          setComposerActivity(state, "writing");
         }
       }
     };
@@ -2055,10 +2091,12 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
         signal: controller.signal,
         onStatus: (status) => {
           activity.set(status);
+          setComposerActivity(state, status);
         },
         onText: writeText,
         onReasoning: (delta) => {
           state.thinkingText += delta;
+          setComposerActivity(state, "thinking");
           if (state.thinkingExpanded) {
             state.clearComposer?.();
             process.stdout.write(delta);
@@ -2114,6 +2152,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       }
       throw error;
     } finally {
+      stopComposerAnimation();
       if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
       state.toggleThinking = null;
       state.setThinkingMouse?.(false);
@@ -2766,6 +2805,18 @@ async function interactive(config, auth, configPath, existingState) {
     rl.setPrompt(color.coral("  ╰─› "));
     rl.prompt();
   }
+
+  // Redraw only when the composer is empty. This preserves readline's cursor
+  // and any text the user is typing while still allowing an idle composer to
+  // show the processing and thinking animation.
+  function refreshComposer() {
+    if (closing || rl.closed || rl.line) return;
+    clearComposerFooter();
+    renderComposerFooter();
+    rl.prompt(true);
+  }
+
+  state.refreshComposer = refreshComposer;
 
   async function runInteractiveLine(line, files) {
     activeRun = true;
