@@ -1008,12 +1008,11 @@ async function animateText(text, paint = color.muted) {
 async function printBanner(config, user = null) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
   const account = user?.email || "Nexara account";
-  const divider = color.muted("─".repeat(Math.max(24, terminalWidth() - 4)));
+  console.log();
   console.log(`  ${nexaraWordmark()} ${color.muted(`CLI ${CURRENT_VERSION}`)}`);
-  console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort`)}`);
-  console.log(`  ${color.teal("●")} ${color.muted("Signed in as")} ${color.cream(account)}`);
-  console.log(`  ${color.muted("⌁")} ${color.muted("Workspace")} ${color.cream(displayPath())} ${color.muted("· /help")}`);
-  console.log(`  ${divider}`);
+  console.log(`  ${color.cream("What would you like to build?")}`);
+  console.log(`  ${color.muted("Model")} ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} reasoning`)}`);
+  console.log(`  ${color.muted("Workspace")} ${color.cream(displayPath())} ${color.muted(`· ${account}`)}`);
   console.log();
 }
 
@@ -1179,7 +1178,7 @@ function printUserTurn(text, files = []) {
 
 function printAssistantHeader(state, mode) {
   const modeLabel = mode ? ` · ${mode}` : "";
-  process.stdout.write(`\n  ${color.coral("✦")} ${color.cream("Nexara")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
+  process.stdout.write(`\n  ${color.coral("NEXARA")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
 }
 
 function printTurnComplete(startedAt) {
@@ -1192,18 +1191,14 @@ function printSessionFooter(state) {
   const ctxUsed = real ?? contextOf(state.messages);
   const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
   const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
-  const effort = REASONING_EFFORT_LABELS[state.config.selectedReasoningEffort] || state.config.selectedReasoningEffort;
-  const width = terminalWidth();
-  const rule = color.muted("─".repeat(Math.max(24, width - 4)));
-  const taskInfo = state.todos?.length ? `${color.coral("●")} ${color.cream("Plan")} ${color.muted(todoSummary(state.todos))}` : `${color.teal("●")} ${color.cream("Ready")}`;
+  const taskInfo = state.todos?.length
+    ? `${color.coral("●")} ${color.cream(todoSummary(state.todos))}`
+    : `${color.teal("●")} ${color.cream("Ready")}`;
   const queueInfo = state.pendingMessages?.length ? ` ${color.amber("·")} ${color.cream(`${state.pendingMessages.length} queued`)}` : "";
-  const threadInfo = state.threadId ? `Thread ${state.threadId.slice(0, 8)}` : "New conversation";
-  const lines = [
-    `  ${rule}`,
-    `  ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted(`· ${effort} effort · ${threadInfo}`)}`,
-    `  ${taskInfo}${queueInfo} ${color.muted("·")} ${color.muted(`${contextBar(percent)} ${percent}% context`)}`,
-    `  ${composerActivityLine(state) || `${color.muted("↵")} ${color.muted("Send · / commands · Esc Esc exits")}`}`,
-  ];
+  const activity = composerActivityLine(state);
+  const lines = [activity
+    ? `  ${activity} ${color.muted(`· ${percent}% context`)}`
+    : `  ${taskInfo}${queueInfo} ${color.muted(`· ${percent}% context · / for commands`)}`];
   // The footer is mounted immediately after the assistant header. A leading
   // newline here becomes an untracked spacer row; when the footer is erased
   // after a response, that row remains and makes the answer look detached.
@@ -2551,7 +2546,7 @@ async function interactive(config, auth, configPath, existingState) {
   const rl = readline.createInterface({
     input,
     output,
-    prompt: color.coral("  ╰─› "),
+    prompt: color.coral("  ❯ "),
     // The CLI draws its own live, described completion strip. Returning no
     // readline completions prevents Node's default multi-line dump from
     // fighting that renderer when Tab is pressed.
@@ -2802,7 +2797,7 @@ async function interactive(config, auth, configPath, existingState) {
     if (closing || rl.closed) return;
     clearComposerFooter();
     renderComposerFooter();
-    rl.setPrompt(color.coral("  ╰─› "));
+    rl.setPrompt(color.coral("  ❯ "));
     rl.prompt();
   }
 
