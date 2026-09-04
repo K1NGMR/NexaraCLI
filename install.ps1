@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = 'https://github.com/K1NGMR/NexaraCLI/archive/refs/heads/main.zip'
+$repo = 'https://github.com/K1NGMR/NexaraCLI/archive/refs/heads/main.zip?version=0.1.65'
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('nexara-cli-' + [guid]::NewGuid().ToString())
 $zip = "$temp.zip"
 try {

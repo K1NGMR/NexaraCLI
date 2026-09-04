@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repository = 'K1NGMR/NexaraCLI'
-$archiveUrl = "https://github.com/$repository/archive/refs/heads/main.zip"
+$archiveUrl = "https://github.com/$repository/archive/refs/heads/main.zip?version=$TargetVersion"
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("nexara-cli-update-" + [guid]::NewGuid().ToString('N'))
 $zipFile = "$tempRoot.zip"
 
