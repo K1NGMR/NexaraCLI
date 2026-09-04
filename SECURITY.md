@@ -24,7 +24,7 @@ service credentials.
 - `.env` files, refresh tokens, or a user's `~/.nexara/config.json`
 
 The CLI authenticates a user with Supabase and sends chat requests to the Nexara
-web API. The web server selects the model, applies quotas and credits, and calls
+web API. The web server selects the model, applies Compute limits, and calls
 OpenRouter-class routers using server-side environment variables. The CLI never needs
 the provider API keys and should not be changed to call those providers directly.
 

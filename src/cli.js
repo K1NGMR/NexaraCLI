@@ -164,6 +164,7 @@ const MODEL_PRICING = new Map([
   ["google/gemini-2.5-flash", { input: 0.3, output: 2.5 }],
   ["google/gemini-2.5-pro", { input: 1.25, output: 10 }],
 ]);
+const COMPUTE_PER_DOLLAR = 1_250_000;
 const MODEL_IMAGE_INPUT = new Set([
   "google/gemini-3.6-flash",
   "google/gemini-3.5-flash",
@@ -173,23 +174,28 @@ const MODEL_IMAGE_INPUT = new Set([
   "google/gemini-2.5-pro",
 ]);
 
-function formatCreditEstimate(cost) {
-  return cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(2)}`;
+function formatComputeEstimate(providerCost) {
+  return `${Math.max(0, Math.round(providerCost * COMPUTE_PER_DOLLAR)).toLocaleString()} Compute`;
 }
 
-function reasoningEffortCreditEstimate(model, effort, inputTokens) {
+function formatComputeRate(providerDollarsPerMillion) {
+  return `${Math.max(0, Math.round(providerDollarsPerMillion * COMPUTE_PER_DOLLAR)).toLocaleString()} Compute`;
+}
+
+function reasoningEffortComputeEstimate(model, effort, inputTokens) {
   const pricing = MODEL_PRICING.get(model);
   if (!pricing) return 0;
-  return (inputTokens * pricing.input + REASONING_EFFORT_OUTPUT_ESTIMATES[effort] * pricing.output) / 1_000_000;
+  const providerCost = (inputTokens * pricing.input + REASONING_EFFORT_OUTPUT_ESTIMATES[effort] * pricing.output) / 1_000_000;
+  return providerCost * COMPUTE_PER_DOLLAR;
 }
 
 function printEffortEstimates(model, inputTokens) {
   const pricing = MODEL_PRICING.get(model);
   if (!pricing) return;
   const estimates = [...REASONING_EFFORTS]
-    .map((effort) => `${REASONING_EFFORT_LABELS[effort]} ~${formatCreditEstimate(reasoningEffortCreditEstimate(model, effort, inputTokens))}`)
+    .map((effort) => `${REASONING_EFFORT_LABELS[effort]} ~${Math.round(reasoningEffortComputeEstimate(model, effort, inputTokens)).toLocaleString()} Compute`)
     .join(" · ");
-  console.log(color.dim(`Estimated $ Credits before sending (${formatTokens(inputTokens)} input tokens): ${estimates}`));
+  console.log(color.dim(`Estimated Compute before sending (${formatTokens(inputTokens)} input tokens): ${estimates}`));
   console.log(color.dim("Estimate uses an illustrative response budget; actual billing uses real provider usage."));
 }
 
@@ -245,16 +251,16 @@ const MODELS = [
   ["router/autorouter", "AutoRouter (recommended)"],
   ["router/openrouter-free", "OpenRouter Free Route"],
   ["openai/gpt-oss-120b", "GPT-OSS-120B"],
-  ["openai/gpt-5.6-luna", "GPT-5.6 Luna (Paid)"],
-  ["openai/gpt-5.6-terra", "GPT-5.6 Terra (Paid)"],
-  ["moonshotai/kimi-k2.6", "Kimi K2.6 (Paid)"],
-  ["moonshotai/kimi-k2.5", "Kimi K2.5 (Paid)"],
-  ["google/gemini-3.6-flash", "Gemini 3.6 Flash (Paid · Vision)"],
-  ["google/gemini-3.5-flash", "Gemini 3.5 Flash (Paid · Vision)"],
-  ["google/gemini-3.1-pro", "Gemini 3.1 Pro (Paid · Vision)"],
-  ["google/gemini-3-flash", "Gemini 3 Flash (Paid · Vision)"],
-  ["google/gemini-2.5-flash", "Gemini 2.5 Flash (Paid · Vision)"],
-  ["google/gemini-2.5-pro", "Gemini 2.5 Pro (Paid · Vision)"],
+  ["openai/gpt-5.6-luna", "GPT-5.6 Luna"],
+  ["openai/gpt-5.6-terra", "GPT-5.6 Terra"],
+  ["moonshotai/kimi-k2.6", "Kimi K2.6"],
+  ["moonshotai/kimi-k2.5", "Kimi K2.5"],
+  ["google/gemini-3.6-flash", "Gemini 3.6 Flash (Vision)"],
+  ["google/gemini-3.5-flash", "Gemini 3.5 Flash (Vision)"],
+  ["google/gemini-3.1-pro", "Gemini 3.1 Pro (Vision)"],
+  ["google/gemini-3-flash", "Gemini 3 Flash (Vision)"],
+  ["google/gemini-2.5-flash", "Gemini 2.5 Flash (Vision)"],
+  ["google/gemini-2.5-pro", "Gemini 2.5 Pro (Vision)"],
   ["minimax/minimax-m2", "MiniMax M2"],
   ["minimax/minimax-m2.1-highspeed", "MiniMax M2.1 High-Speed"],
   ["minimax/minimax-m2.1", "MiniMax M2.1"],
@@ -262,7 +268,7 @@ const MODELS = [
   ["minimax/minimax-m2.5", "MiniMax M2.5"],
   ["minimax/minimax-m2.7-highspeed", "MiniMax M2.7 High-Speed"],
   ["minimax/minimax-m2.7", "MiniMax M2.7"],
-  ["minimax/minimax-m3", "MiniMax M3 (Paid · $ Credits)"],
+  ["minimax/minimax-m3", "MiniMax M3"],
   ["mistralai/ministral-3b", "Ministral 3B"],
   ["mistralai/ministral-8b", "Ministral 8B"],
   ["mistralai/ministral-14b", "Ministral 14B"],
@@ -280,41 +286,41 @@ const MODELS = [
   ["meta/llama-3.2-1b-instruct", "Llama 3.2 1B Instruct"],
   ["meta/llama-3.2-3b-instruct", "Llama 3.2 3B Instruct"],
   ["meta/llama-3.1-8b-instruct", "Llama 3.1 8B Instruct"],
-  ["deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 07.31 (Paid · $ Credits)"],
-  ["xiaomi/mimo-v2.5-pro:free", "Xiaomi Mimo V2.5 Pro (Paid · $ Credits)"],
-  ["xiaomi/mimo-v2.5:free", "Xiaomi Mimo V2.5 (Paid · $ Credits)"],
-  ["x-ai/grok-4.5", "Grok 4.5 (Paid)"],
+  ["deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 07.31"],
+  ["xiaomi/mimo-v2.5-pro:free", "Xiaomi Mimo V2.5 Pro"],
+  ["xiaomi/mimo-v2.5:free", "Xiaomi Mimo V2.5"],
+  ["x-ai/grok-4.5", "Grok 4.5"],
   ["nvidia/nemotron-3-nano", "Nemotron 3 Nano"],
   ["nvidia/nemotron-3-super", "Nemotron 3 Super"],
   ["nvidia/nemotron-3-ultra", "Nemotron 3 Ultra"],
-  ["qwen/qwen3.8-max", "Qwen 3.8 Max ($ Credits)"],
-  ["qwen/qwen3.7-max", "Qwen 3.7 Max ($ Credits)"],
-  ["qwen/qwen3.7-plus", "Qwen 3.7 Plus ($ Credits)"],
-  ["qwen/qwen3.6-max-preview", "Qwen 3.6 Max (Preview) ($ Credits)"],
-  ["qwen/qwen3.6-plus", "Qwen 3.6 Plus ($ Credits)"],
-  ["qwen/qwen3.6-27b", "Qwen 3.6 27B ($ Credits)"],
-  ["qwen/qwen3.6-35b-a3b", "Qwen 3.6 35B A3B ($ Credits)"],
-  ["qwen/qwen3.5-plus", "Qwen 3.5 Plus ($ Credits)"],
-  ["qwen/qwen3.5-397b-a17b", "Qwen 3.5 397B A17B ($ Credits)"],
-  ["qwen/qwen3.5-omni-plus", "Qwen 3.5 Omni Plus ($ Credits)"],
-  ["qwen/qwen3.5-flash", "Qwen 3.5 Flash ($ Credits)"],
-  ["qwen/qwen3.5-omni-flash", "Qwen 3.5 Omni Flash ($ Credits)"],
-  ["qwen/qwen3-coder-plus", "Qwen3 Coder Plus ($ Credits)"],
-  ["qwen/qwen3-max", "Qwen3 Max ($ Credits)"],
-  ["qwen/qwen3-vl-plus", "Qwen3 VL Plus ($ Credits)"],
-  ["qwen/qwen3-omni-flash", "Qwen3 Omni Flash ($ Credits)"],
-  ["qwen/qwen-plus-2025-07-28", "Qwen Plus 07.28 ($ Credits)"],
-  ["stealth/ox-alpha-free", "Ox Alpha ($ Credits)"],
-  ["z-ai/glm-4.5-air", "GLM 4.5 Air ($ Credits)"],
-  ["z-ai/glm-4.5", "GLM 4.5 ($ Credits)"],
-  ["z-ai/glm-4.6", "GLM 4.6 ($ Credits)"],
-  ["z-ai/glm-4.7", "GLM 4.7 ($ Credits)"],
-  ["z-ai/glm-5", "GLM 5 ($ Credits)"],
-  ["z-ai/glm-5-turbo", "GLM 5 Turbo ($ Credits)"],
-  ["z-ai/glm-5.1", "GLM 5.1 ($ Credits)"],
-  ["z-ai/glm-5.2", "GLM 5.2 ($ Credits)"],
-  ["z-ai/glm-5.3", "GLM 5.3 ($ Credits)"],
-  ["z-ai/glm-5.3-flash", "GLM 5.3 Flash ($ Credits)"],
+  ["qwen/qwen3.8-max", "Qwen 3.8 Max"],
+  ["qwen/qwen3.7-max", "Qwen 3.7 Max"],
+  ["qwen/qwen3.7-plus", "Qwen 3.7 Plus"],
+  ["qwen/qwen3.6-max-preview", "Qwen 3.6 Max (Preview)"],
+  ["qwen/qwen3.6-plus", "Qwen 3.6 Plus"],
+  ["qwen/qwen3.6-27b", "Qwen 3.6 27B"],
+  ["qwen/qwen3.6-35b-a3b", "Qwen 3.6 35B A3B"],
+  ["qwen/qwen3.5-plus", "Qwen 3.5 Plus"],
+  ["qwen/qwen3.5-397b-a17b", "Qwen 3.5 397B A17B"],
+  ["qwen/qwen3.5-omni-plus", "Qwen 3.5 Omni Plus"],
+  ["qwen/qwen3.5-flash", "Qwen 3.5 Flash"],
+  ["qwen/qwen3.5-omni-flash", "Qwen 3.5 Omni Flash"],
+  ["qwen/qwen3-coder-plus", "Qwen3 Coder Plus"],
+  ["qwen/qwen3-max", "Qwen3 Max"],
+  ["qwen/qwen3-vl-plus", "Qwen3 VL Plus"],
+  ["qwen/qwen3-omni-flash", "Qwen3 Omni Flash"],
+  ["qwen/qwen-plus-2025-07-28", "Qwen Plus 07.28"],
+  ["stealth/ox-alpha-free", "Ox Alpha"],
+  ["z-ai/glm-4.5-air", "GLM 4.5 Air"],
+  ["z-ai/glm-4.5", "GLM 4.5"],
+  ["z-ai/glm-4.6", "GLM 4.6"],
+  ["z-ai/glm-4.7", "GLM 4.7"],
+  ["z-ai/glm-5", "GLM 5"],
+  ["z-ai/glm-5-turbo", "GLM 5 Turbo"],
+  ["z-ai/glm-5.1", "GLM 5.1"],
+  ["z-ai/glm-5.2", "GLM 5.2"],
+  ["z-ai/glm-5.3", "GLM 5.3"],
+  ["z-ai/glm-5.3-flash", "GLM 5.3 Flash"],
   ["sensenova/sensenova-6.7-flash-lite", "SenseNova 6.7 Flash-Lite"],
   ["sensenova/sensenova-6.8-flash-lite", "SenseNova 6.8 Flash-Lite"],
   ["deepseek/deepseek-v3.2", "DeepSeek V3.2"],
@@ -1342,7 +1348,7 @@ function printModels(selected, query = "") {
     const locked = LOCKED_MODELS.has(id);
     const marker = id === selected ? color.green("●") : locked ? color.yellow("🔒") : "○";
     const pricing = MODEL_PRICING.get(id);
-    const priceLabel = pricing ? color.dim(` — $${pricing.input}/1M in · $${pricing.output}/1M out`) : "";
+    const priceLabel = pricing ? color.dim(` — ${formatComputeRate(pricing.input)}/1M in · ${formatComputeRate(pricing.output)}/1M out`) : "";
     const imageLabel = MODEL_IMAGE_INPUT.has(id) ? color.cyan(" · Vision input") : "";
     console.log(`${marker} ${label} ${color.dim(`(${id})`)}${priceLabel}${imageLabel}${locked ? color.yellow(" — unavailable") : ""}`);
   }
@@ -1587,7 +1593,7 @@ async function selectModelInteractive(selected) {
         const active = absoluteIndex === selectedModelIndex();
         const marker = entry.locked ? color.amber("🔒") : active ? color.coral("›") : entry.selected ? color.green("✓") : color.dim("·");
         const pricing = MODEL_PRICING.get(entry.id);
-        const price = pricing ? ` · $${pricing.input}/$${pricing.output} per 1M` : "";
+        const price = pricing ? ` · ${formatComputeRate(pricing.input)} in · ${formatComputeRate(pricing.output)} out per 1M` : "";
         const vision = MODEL_IMAGE_INPUT.has(entry.id) ? " · vision" : "";
         const unavailable = entry.locked ? " · unavailable" : "";
         content = `  ${marker} ${active ? color.cream(entry.label) : entry.locked ? color.amber(entry.label) : color.muted(entry.label)} ${color.dim(`(${entry.id})`)}${color.dim(`${price}${vision}${unavailable}`)}`;
@@ -1744,7 +1750,7 @@ ${color.dim("Tip: type / and press Tab to autocomplete commands; use ↑/↓ or 
 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
 ${color.dim("Updates: nexara update (install now), nexara update --on / --off (toggle silent background updates)")}
-${color.dim("Outside the REPL: nexara \"prompt\", --print, --output-format json|stream-json, --max-turns N, --max-budget USD")}
+${color.dim("Outside the REPL: nexara \"prompt\", --print, --output-format json|stream-json, --max-turns N, --max-budget COMPUTE")}
 ${color.dim("Automation flags: --allowed-tools A,B · --disallowed-tools A,B · --permission-mode ask|auto|sandboxed|full · --no-session-persistence")}
 `);
 }
@@ -1835,7 +1841,7 @@ function parseArgs(argv) {
       if (!Number.isInteger(options.maxTurns) || options.maxTurns < 1) throw new Error("--max-turns must be a positive whole number.");
       i += 1;
     } else if (arg === "--max-budget") {
-      options.maxBudget = Number(requiredValue(i, arg, "a dollar amount"));
+      options.maxBudget = Number(requiredValue(i, arg, "a Compute-unit amount"));
       if (!Number.isFinite(options.maxBudget) || options.maxBudget <= 0) throw new Error("--max-budget must be greater than zero.");
       i += 1;
     } else if (arg === "--allowed-tools") {
@@ -2013,10 +2019,11 @@ async function loadSavedThread(auth, threadId) {
   return { local: false, ...remote };
 }
 
-function usageCost(model, usage) {
+function usageCompute(model, usage) {
   const pricing = MODEL_PRICING.get(model);
   if (!pricing || !usage) return 0;
-  return ((Number(usage.inputTokens) || 0) * pricing.input + (Number(usage.outputTokens) || 0) * pricing.output) / 1_000_000;
+  const providerCost = ((Number(usage.inputTokens) || 0) * pricing.input + (Number(usage.outputTokens) || 0) * pricing.output) / 1_000_000;
+  return Math.max(0, Math.round(providerCost * COMPUTE_PER_DOLLAR));
 }
 
 async function retryChatRequest(request, { onRetry, maxAttempts = 3 } = {}) {
@@ -2036,7 +2043,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   const trimmed = String(text || "").trim();
   if (!trimmed) return null;
   state.cwd ||= process.cwd();
-  state.spentCredits ||= 0;
+  state.spentCompute ||= 0;
   state.maxTurns ||= state.config.maxTurns || 25;
   state.maxBudget ??= state.config.maxBudget;
   await ensureThread(state, trimmed.replace(/\s+/g, " "));
@@ -2056,8 +2063,8 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   let lastAssistant = null;
   let emptyContinuationRetries = 0;
   for (let turn = 1; turn <= maxTurns; turn += 1) {
-    if (state.maxBudget && state.spentCredits >= state.maxBudget) {
-      const messageText = `Stopped before another model turn because the $${state.maxBudget.toFixed(2)} session budget was reached.`;
+    if (state.maxBudget && state.spentCompute >= state.maxBudget) {
+      const messageText = `Stopped before another model turn because the ${state.maxBudget.toLocaleString()} Compute-unit session budget was reached.`;
       if (!quiet) composerNotice(state, messageText, "amber");
       outputToolEvent(state, { type: "budget-stop", message: messageText });
       break;
@@ -2192,7 +2199,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     }
     if (assistant.usage) {
       state.lastUsage = assistant.usage;
-      state.spentCredits += usageCost(assistant.model || state.config.selectedModel, assistant.usage);
+      state.spentCompute += usageCompute(assistant.model || state.config.selectedModel, assistant.usage);
     }
     for (const artifact of serverArtifacts) {
       const saved = await saveServerArtifact(state, artifact.name, artifact.output).catch(() => null);
@@ -2554,7 +2561,7 @@ async function interactive(config, auth, configPath, existingState) {
   state.interactive = true;
   state.maxTurns ||= state.config.maxTurns || 25;
   state.maxBudget ??= state.config.maxBudget;
-  state.spentCredits ||= 0;
+  state.spentCompute ||= 0;
   await printBanner(config, await auth.user());
   const rl = readline.createInterface({
     input,
@@ -2924,7 +2931,7 @@ async function oneShot(config, auth, options, configPath) {
     outputFormat: options.outputFormat,
     maxTurns: options.maxTurns || config.maxTurns || 25,
     maxBudget: options.maxBudget || config.maxBudget || null,
-    spentCredits: 0,
+    spentCompute: 0,
     askApproval: async () => "n",
     askQuestion: async () => "",
   };

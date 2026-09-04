@@ -168,7 +168,7 @@ For scripts and CI, use the same controls without opening the REPL:
 ```text
 nexara -p "Review this project" --output-format json
 nexara -p "Run the tests and fix the failure" --permission-mode sandboxed --max-turns 12
-nexara -p "Inspect the build" --output-format stream-json --max-budget 0.50
+nexara -p "Inspect the build" --output-format stream-json --max-budget 625000
 nexara -p "Read-only audit" --allowed-tools Read,Search,Glob --disallowed-tools Bash
 nexara -p "One-off task" --no-session-persistence
 ```

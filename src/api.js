@@ -23,7 +23,7 @@ async function responseError(response) {
     // Plain-text server errors are already useful.
   }
   if (response.status === 402 && /not enough compute|top.?up more/i.test(message)) {
-    message = "Insufficient $ Credits for this paid model. Your daily Compute allowance is separate; add $ Credits or choose a free model.";
+    message = "Compute limit reached for this model. Choose another model or wait for your Compute allowance to reset.";
   }
   const error = new Error(`Nexara API: ${message}`);
   error.status = response.status;
