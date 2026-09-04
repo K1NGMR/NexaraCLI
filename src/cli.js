@@ -3404,6 +3404,8 @@ async function interactive(config, auth, configPath, existingState) {
     state.pendingImages = [];
     if (activeRun) {
       pendingMessages.push({ line, files });
+      state.prepareTranscript?.(wrapChatText(line).length + 4 + (files.length ? 1 : 0));
+      printUserTurn(line, files);
       console.log(`  ${color.amber("↳")} ${color.cream("Queued")} ${color.muted(`message ${pendingMessages.length} · will run after the current turn`)}`);
       showComposer();
       return;
