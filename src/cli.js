@@ -2972,6 +2972,14 @@ async function interactive(config, auth, configPath, existingState) {
       // scroll region prevents long responses from ever pushing the controls.
       output.write("\u001b[s");
       transcriptCursorSaved = true;
+      // Draw the rail BEFORE establishing the scroll region: on Windows
+      // Terminal, issuing DECSTBM (the scroll-region escape) right before
+      // painting rows outside that region can leave the last couple of rows
+      // (the bottom rule and footer here) never actually rendered, even
+      // though the same absolute-cursor writes work fine once the region is
+      // already in place. Draw once now, set the region, then draw again so
+      // the rail is guaranteed visible regardless of that ordering quirk.
+      drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[${inputRow};1H`);
