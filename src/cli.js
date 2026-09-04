@@ -686,6 +686,23 @@ function notice(message, tone = "teal") {
   console.log(`  ${paint(marker)} ${message}`);
 }
 
+function composerNotice(state, message, tone = "teal") {
+  // A live readline prompt owns the rows below the transcript. Printing over
+  // it and then redrawing the footer can erase the message entirely, making a
+  // provider failure look like the model simply stopped.
+  state.clearComposer?.();
+  notice(message, tone);
+  state.mountComposer?.();
+}
+
+function isRetryableGenerationError(error) {
+  if (!error || error.name === "AbortError") return false;
+  if (error.retryable === true || error.code === "STREAM_TERMINATED") return true;
+  const status = Number(error.status);
+  if ([408, 425, 429].includes(status) || status >= 500) return true;
+  return /rate.?limit|temporar|timeout|timed out|terminated|premature|network|fetch failed|socket|connection reset|overloaded|empty response/i.test(String(error.message || error));
+}
+
 function toolArgumentPreview(name, args = {}) {
   const value = args.command || args.file_path || args.path || args.pattern || args.query || args.url || args.message;
   if (typeof value === "string" && value.trim()) return shorten(value.trim(), Math.max(24, terminalWidth() - 25));
@@ -2002,6 +2019,19 @@ function usageCost(model, usage) {
   return ((Number(usage.inputTokens) || 0) * pricing.input + (Number(usage.outputTokens) || 0) * pricing.output) / 1_000_000;
 }
 
+async function retryChatRequest(request, { onRetry, maxAttempts = 3 } = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!isRetryableGenerationError(error) || attempt >= maxAttempts) throw error;
+      await onRetry?.(error, attempt, maxAttempts);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1500, 350 * attempt)));
+    }
+  }
+  return null;
+}
+
 async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return null;
@@ -2028,7 +2058,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   for (let turn = 1; turn <= maxTurns; turn += 1) {
     if (state.maxBudget && state.spentCredits >= state.maxBudget) {
       const messageText = `Stopped before another model turn because the $${state.maxBudget.toFixed(2)} session budget was reached.`;
-      if (!quiet) notice(messageText, "amber");
+      if (!quiet) composerNotice(state, messageText, "amber");
       outputToolEvent(state, { type: "budget-stop", message: messageText });
       break;
     }
@@ -2079,7 +2109,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     };
     let assistant;
     try {
-      assistant = await sendChat({
+      assistant = await retryChatRequest(() => sendChat({
         auth: state.auth,
         appUrl: state.config.appUrl,
         threadId: state.threadId,
@@ -2123,18 +2153,24 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
           const metadata = event.metadata || event.messageMetadata || {};
           outputToolEvent(state, { type: "finish", model: metadata.model || null, usage: metadata.usage || null });
         },
+      }), {
+        onRetry: async (_error, attempt, maxAttempts) => {
+          activity.clear();
+          if (!quiet) composerNotice(state, `The model connection failed. Retrying (${attempt}/${maxAttempts - 1})…`, "amber");
+          activity.render();
+        },
       });
     } catch (error) {
       activity.clear();
       if (error?.name === "AbortError") {
         const messageText = "Generation cancelled.";
-        if (!quiet) notice(messageText, "amber");
+        if (!quiet) composerNotice(state, messageText, "amber");
         outputToolEvent(state, { type: "cancelled", message: messageText });
         return null;
       }
       if (error?.code === "STREAM_TERMINATED") {
         const messageText = error.message || "The response connection was terminated before the model finished. Please try again.";
-        if (!quiet) notice(messageText, "red");
+        if (!quiet) composerNotice(state, messageText, "red");
         outputToolEvent(state, { type: "error", code: error.code, message: messageText });
         return null;
       }
@@ -2176,7 +2212,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     // small, bounded number of times, preserving any tool result in context.
     if (!call && !responseText.trim() && emptyContinuationRetries < 2) {
       emptyContinuationRetries += 1;
-      if (!quiet) notice(`The model returned an empty continuation. Retrying (${emptyContinuationRetries}/2)…`, "amber");
+      if (!quiet) composerNotice(state, `The model returned an empty continuation. Retrying (${emptyContinuationRetries}/2)…`, "amber");
       // A transport/provider retry must not consume one of the user's agent
       // turns. The for-loop increment would otherwise make maxTurns=1 exit
       // before the retry ever runs.
@@ -2184,7 +2220,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       continue;
     }
     if (!call && !responseText.trim() && !quiet) {
-      notice("The model returned no response after 3 attempts. Please try again or switch models with /model.", "red");
+      composerNotice(state, "The model returned no response after 3 attempts. Please try again or switch models with /model.", "red");
     }
     if (!call || !CLI_LOCAL_TOOL_NAMES.has(call.name) && call.name !== "ask_question") {
       conversation.push(assistant);
@@ -2785,7 +2821,7 @@ async function interactive(config, auth, configPath, existingState) {
         await runPrompt(state, line, { files, onStart: state.mountComposer });
       }
     } catch (error) {
-      console.log(color.red(error instanceof Error ? error.message : String(error)));
+      composerNotice(state, error instanceof Error ? error.message : String(error), "red");
     } finally {
       activeRun = false;
       state.busy = false;
