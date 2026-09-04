@@ -2915,13 +2915,19 @@ async function interactive(config, auth, configPath, existingState) {
   // Everything above that boundary is the transcript and uses the terminal's
   // normal top-to-bottom scroll direction.
   const transcriptBottom = () => Math.max(3, terminalRows() - (COMPOSER_INPUT_ROWS + 3));
+  // Logical cursor for transcript content. The first turn should follow the
+  // header near the top (as in the reference), not jump to the bottom just
+  // because the composer is fixed there. Once content fills the viewport the
+  // cursor naturally clamps to the scroll-region tail.
+  let transcriptFlowRow = 8;
   // The editor cursor lives inside the fixed rail. Before committing any
   // transcript text, anchor output at the scroll region's bottom so the rail
   // can never repaint over a just-submitted message.
   state.prepareTranscript = (reservedRows = 1) => {
     if (!fixedComposer || !output.isTTY) return;
     const rows = Math.max(1, Math.min(transcriptBottom(), Number(reservedRows) || 1));
-    const start = Math.max(1, transcriptBottom() - rows + 1);
+    const start = Math.max(1, Math.min(transcriptFlowRow, transcriptBottom() - rows + 1));
+    transcriptFlowRow = Math.min(transcriptBottom(), start + rows);
     output.write(`\u001b[1;${transcriptBottom()}r\u001b[${start};1H`);
   };
   let transcriptCursorSaved = false;
