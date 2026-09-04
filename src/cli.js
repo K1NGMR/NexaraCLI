@@ -2568,6 +2568,9 @@ async function interactive(config, auth, configPath, existingState) {
   // Keep its height so a submitted line can remove it before the next turn
   // is committed, leaving the transcript growing down from the top.
   let composerFooterLines = 0;
+  const fixedComposer = Boolean(input.isTTY && output.isTTY);
+  const terminalRows = () => Math.max(8, Number(output.rows) || 24);
+  const transcriptBottom = () => Math.max(3, terminalRows() - 3);
   let slashSuggestionLines = 0;
   let slashSuggestionIndex = -1;
   let slashSuggestionInput = null;
@@ -2579,6 +2582,13 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   function clearComposerFooter() {
+    if (fixedComposer) {
+      const rows = terminalRows();
+      output.write(`\u001b[${transcriptBottom() + 1};1H\u001b[2K\u001b[${rows - 1};1H\u001b[2K\u001b[${rows};1H\u001b[2K\u001b[${transcriptBottom()};1H\u001b[0m`);
+      composerFooterLines = 0;
+      state.composerFooterLines = 0;
+      return;
+    }
     if (!composerFooterLines || !output.isTTY) {
       state.composerFooterLines = 0;
       return;
@@ -2600,6 +2610,7 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   function renderComposerFooter() {
+    if (fixedComposer) return;
     composerFooterLines = printSessionFooter(state);
     state.composerFooterLines = composerFooterLines;
   }
@@ -2608,7 +2619,7 @@ async function interactive(config, auth, configPath, existingState) {
   // the bottom while status updates are drawn above it.
   state.composerFooterLines = 0;
   state.clearComposer = clearComposerFooter;
-  state.mountComposer = showComposer;
+  state.mountComposer = () => { if (!state.busy) showComposer(); };
 
   function clearSlashSuggestions(afterSubmit = false) {
     cancelSlashSuggestionTimer();
@@ -2634,7 +2645,7 @@ async function interactive(config, auth, configPath, existingState) {
 
   function drawSlashSuggestions() {
     slashSuggestionTimer = null;
-    if (state.modalOpen || !output.isTTY) return;
+    if (fixedComposer || state.modalOpen || !output.isTTY) return;
     const rows = renderSlashSuggestions(rl.line, slashSuggestionIndex);
     if (slashSuggestionLines) clearSlashSuggestions();
     if (!rows.length) return;
@@ -2644,7 +2655,7 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   function scheduleSlashSuggestions() {
-    if (!output.isTTY || state.modalOpen || slashSuggestionTimer) return;
+    if (fixedComposer || !output.isTTY || state.modalOpen || slashSuggestionTimer) return;
     if (rl.line !== slashSuggestionInput) {
       slashSuggestionInput = rl.line;
       const matches = slashSuggestionMatches(rl.line);
@@ -2784,6 +2795,18 @@ async function interactive(config, auth, configPath, existingState) {
   function showComposer() {
     if (closing || rl.closed) return;
     clearComposerFooter();
+    if (fixedComposer) {
+      const rows = terminalRows();
+      const statusRow = transcriptBottom() + 1;
+      const inputRow = rows - 1;
+      // Reserve the last three rows. The terminal scrolls only the transcript
+      // above them, which makes the command box genuinely fixed at the bottom.
+      output.write(`\u001b[1;${transcriptBottom()}r`);
+      output.write(`\u001b[${statusRow};1H\u001b[2K  ${color.muted("/ for commands · Esc Esc exits")}\u001b[${inputRow};1H\u001b[48;2;54;49;45m\u001b[2K\u001b[0m\u001b[${rows};1H\u001b[2K  ${color.muted("Nexara · ready")}\u001b[${inputRow};1H`);
+      rl.setPrompt("\u001b[48;2;54;49;45m\u001b[38;2;250;249;245m  ❯ \u001b[0m");
+      rl.prompt();
+      return;
+    }
     renderComposerFooter();
     // Paint the entire terminal row using Erase Line under a dark surface
     // color rather than trusting `stdout.columns` (which can be wrong in
@@ -2820,7 +2843,7 @@ async function interactive(config, auth, configPath, existingState) {
           state.modalOpen = false;
         }
       } else {
-        await runPrompt(state, line, { files, onStart: state.mountComposer });
+        await runPrompt(state, line, { files });
       }
     } catch (error) {
       composerNotice(state, error instanceof Error ? error.message : String(error), "red");
@@ -2857,10 +2880,6 @@ async function interactive(config, auth, configPath, existingState) {
       showComposer();
       return;
     }
-    // Mount the next composer synchronously. Thread creation, auth refresh,
-    // and routing can all take time; the user must still be able to type and
-    // queue another message during that work.
-    showComposer();
     void runInteractiveLine(line, files);
   };
 
@@ -2874,6 +2893,7 @@ async function interactive(config, auth, configPath, existingState) {
 
   rl.on("line", onLine);
   rl.once("close", onClose);
+  if (fixedComposer) output.write(`\u001b[1;${transcriptBottom()}r\u001b[${transcriptBottom()};1H`);
   showComposer();
   try {
     await interactiveFinished;
@@ -2887,6 +2907,7 @@ async function interactive(config, auth, configPath, existingState) {
     clearSlashSuggestions(true);
     if (mic) await mic.stop().catch(() => {});
     clearBackgroundProcesses();
+    if (fixedComposer) output.write("\u001b[r\u001b[0m\r\n");
     rl.close();
   }
 }
