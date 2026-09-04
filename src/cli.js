@@ -465,56 +465,12 @@ const color = {
   magenta: rgb(204, 120, 92),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
-// A terminal-safe raster sampled from the Nexara Petal logo. Each character
-// is a source-image colour bucket; the renderer paints it as a pair of
-// true-colour spaces so the mark remains crisp in Windows Terminal and other
-// ANSI-capable terminals. This replaces the old invented puppet silhouette.
-const NEXARA_LOGO_FRAME = [
-  "..............P..............",
-  ".............PPP.............",
-  "............PPPPP............",
-  "...........PPPPPPP...........",
-  "..........PPPPPPPPP..........",
-  ".VVVVVVVPPPPPPPPPPPPPPPPPPVV.",
-  ".VVBBVVVVVPPPPPPPPPVVVVVVVVW.",
-  "..BBBBBBVVPMMPWPMMPVVVVVVVW..",
-  "...VBBBBBBBWMMWMWWPPVVVVVW...",
-  "....MMMMMMMWWWWWWPPVVVVVV....",
-  "....WVVBBBVWWWWWWPPPVVVVW....",
-  "...WVVBBBVVWWWWWWWPVVVVVV....",
-  "..WVVBBBBBVMMPWPMMVVVVBBBV...",
-  "..BBBBBBBBPMPBBVPMPBBBBBBBB..",
-  ".BBBBBBBBBVBBBBBBVVBBBBBBBBB.",
-  ".WWWWWWWW.BBBBBBBBB.WWWWWWWW.",
-  "...........BBBBBBB...........",
-  "............BBBBB............",
-  ".............BBB.............",
-  "..............W..............",
-];
-
-// The gentle pulse changes colour intensity only; the logo geometry never
-// jumps, stretches, or morphs into a different character while loading.
-const PETAL_PIXEL_FRAMES = [NEXARA_LOGO_FRAME, NEXARA_LOGO_FRAME, NEXARA_LOGO_FRAME];
-
-const PIXEL_COLORS = {
-  B: [63, 122, 250],
-  P: [151, 50, 239],
-  V: [105, 88, 239],
-  M: [239, 96, 216],
-  W: [250, 249, 245],
-};
+// The CLI uses a small, typography-first petal mark. A multi-line pixel
+// raster consumes valuable terminal height and looked broken at non-default
+// font sizes; this stays crisp in every ANSI-capable terminal.
+const PETAL_MARK_FRAMES = ["✦", "✧", "✺", "✧"];
 
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
-
-function pixelCell(value, frameIndex = 0) {
-  const rgbValue = PIXEL_COLORS[value];
-  if (!rgbValue) return "  ";
-  const pulse = frameIndex % 3 === 1 ? 1.04 : 1;
-  const red = Math.min(255, Math.round(rgbValue[0] * pulse));
-  const green = Math.min(255, Math.round(rgbValue[1] * pulse));
-  const blue = Math.min(255, Math.round(rgbValue[2] * pulse));
-  return `\u001b[48;2;${red};${green};${blue}m  \u001b[0m`;
-}
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
@@ -701,7 +657,7 @@ function printPanel(lines, { accent = color.coral } = {}) {
   const innerWidth = width - 6;
   console.log(`  ${accent("╭")}${accent("─".repeat(width - 4))}${accent("╮")}`);
   for (const line of lines) console.log(panelLine(line, innerWidth));
-  console.log(`  ${accent("╰")}${accent("─".repeat(width - 2))}${accent("╯")}`);
+  console.log(`  ${accent("╰")}${accent("─".repeat(width - 4))}${accent("╯")}`);
 }
 
 function chip(label, value, accent = color.coral) {
@@ -972,55 +928,29 @@ async function saveServerArtifact(state, name, output) {
   return filePath;
 }
 
-function logoPixelLines(frameIndex = 0, { compact = false, label = "" } = {}) {
-  const frame = PETAL_PIXEL_FRAMES[frameIndex % PETAL_PIXEL_FRAMES.length];
-  const sourceRows = compact ? frame.filter((_, index) => index % 2 === 0) : frame;
-  const sourceColumns = compact ? 2 : 1;
-  const width = Math.max(...frame.map((line) => line.length));
-  const lines = sourceRows.map((line) => {
-    const padded = line.padEnd(width, ".");
-    const pixels = [];
-    for (let index = 0; index < padded.length; index += sourceColumns) {
-      pixels.push(pixelCell(padded[index], frameIndex));
-    }
-    return `  ${pixels.join("")}`;
-  });
-  if (label) lines.push(`  ${color.muted(label)}`);
-  return lines;
+function petalMark(frameIndex = 0) {
+  const glyph = PETAL_MARK_FRAMES[frameIndex % PETAL_MARK_FRAMES.length];
+  return `${color.violet(glyph)}${color.pink("✦")}`;
 }
 
-function mascotPixelLines(frameIndex, label = "") {
-  return logoPixelLines(frameIndex, { label });
+function nexaraWordmark(frameIndex = 0) {
+  return `${petalMark(frameIndex)} ${color.cream("Nexara")}`;
 }
 
 function pause(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function animateMascot(label = "Waking up your workspace") {
+async function animateMascot(label = "Starting Nexara") {
   if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ANIMATION === "1") {
     return;
   }
-  const frameLines = mascotPixelLines(0, label);
-  const draw = (index) => {
-    const lines = mascotPixelLines(index, label);
-    // Always redraw from the absolute home position. Relative cursor-up
-    // caused the old mascot to push the actual CLI hundreds of rows down.
-    output.write("\u001b[H");
-    lines.forEach((line, lineIndex) => {
-      output.write(`\u001b[2K\r${line}${lineIndex === lines.length - 1 ? "" : "\n"}`);
-    });
-  };
   output.write("\u001b[?25l");
-  for (let index = 0; index < PETAL_PIXEL_FRAMES.length * 3; index += 1) {
-    draw(index);
-    await pause(120);
+  for (let index = 0; index < PETAL_MARK_FRAMES.length * 2; index += 1) {
+    output.write(`\r\u001b[2K  ${nexaraWordmark(index)} ${color.muted(label)}`);
+    await pause(75);
   }
-  output.write("\u001b[H");
-  frameLines.forEach((_, lineIndex) => {
-    output.write(`\u001b[2K\r${lineIndex === frameLines.length - 1 ? "" : "\n"}`);
-  });
-  output.write("\u001b[H\u001b[?25h");
+  output.write("\r\u001b[2K\u001b[?25h");
 }
 
 async function animateText(text, paint = color.muted) {
@@ -1038,20 +968,11 @@ async function animateText(text, paint = color.muted) {
 async function printBanner(config, user = null) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
   const account = user?.email || "Nexara account";
-  // Keep the logo visible after the loading animation and start the settled
-  // interface at the top of the cleared terminal.
-  console.log(logoPixelLines(1, { compact: true }).join("\n"));
-  console.log(`${color.coral("✦")} ${color.cream("Nexara")} ${color.muted(`v${CURRENT_VERSION}`)}`);
-  console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted("with")} ${color.cream(effort)} ${color.muted(`effort · ${account}`)}`);
-  console.log(`  ${color.muted(displayPath())}`);
-  console.log();
-  await animateText("  A calm terminal for ambitious work.");
-  console.log();
-  console.log(`  ${color.teal("✓")} ${color.cream("Workspace ready")} ${color.muted("· /status for session details")}`);
-  console.log();
-  console.log(`  ${color.cream("Keep working from anywhere")}`);
-  console.log(`  ${color.muted("Your Nexara threads stay available across the web, desktop, and mobile app.")}`);
-  console.log(`  ${color.muted("Use /resume to continue a saved thread · /threads to browse recent work.")}`);
+  // Keep startup concise: the conversation begins at the top of a freshly
+  // cleared terminal instead of below a marketing-sized banner.
+  console.log(`  ${nexaraWordmark()} ${color.muted(`CLI v${CURRENT_VERSION}`)}`);
+  console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort · ${account}`)}`);
+  console.log(`  ${color.teal("●")} ${color.cream("Workspace ready")} ${color.muted(`· ${displayPath()} · /help`)}`);
   console.log();
 }
 
@@ -1205,11 +1126,9 @@ function wrapChatText(text, width = Math.max(24, terminalWidth() - 6)) {
 
 function userTurnLine(text) {
   const width = Math.max(20, terminalWidth());
-  const visible = String(text || "").slice(0, width);
-  const padded = visible + " ".repeat(Math.max(0, width - visible.length));
-  // Claude-style full-width prompt row: it separates the user's request from
-  // the assistant transcript without turning the response into a card.
-  return ansi("48;2;48;46;43;38;2;250;249;245", padded);
+  const visible = String(text || "").slice(0, Math.max(1, width - 2));
+  const padded = ` ${visible}` + " ".repeat(Math.max(0, width - visible.length - 1));
+  return ansi("48;2;54;49;45;38;2;250;249;245", padded);
 }
 
 function printUserTurn(text, files = []) {
@@ -1239,19 +1158,22 @@ function printSessionFooter(state) {
   const thread = state.threadId ? `thread ${state.threadId.slice(0, 8)}` : "new thread";
   const effort = REASONING_EFFORT_LABELS[state.config.selectedReasoningEffort] || state.config.selectedReasoningEffort;
   const width = terminalWidth();
-  const fullWidth = (text = "") => {
-    const content = shorten(text, width);
-    return `${content}${" ".repeat(Math.max(0, width - visibleLength(content)))}`;
+  const innerWidth = Math.max(30, width - 6);
+  const dockLine = (text = "") => {
+    const content = shorten(text, innerWidth);
+    return `  ${color.muted("│")} ${content}${" ".repeat(Math.max(0, innerWidth - visibleLength(content)))} ${color.muted("│")}`;
   };
-  const rule = () => color.muted("─".repeat(width));
+  const top = `  ${color.muted("╭")}${color.coral("─")} ${color.cream("Nexara chat")} ${color.muted("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted(`· ${effort} effort`)}`;
+  const fill = Math.max(0, width - visibleLength(top) - 1);
+  const bottom = `  ${color.muted("╰")}${color.muted("─".repeat(width - 4))}${color.muted("╯")}`;
+  const taskInfo = state.todos?.length ? `${color.coral("●")} ${color.cream("Task plan")} ${color.muted(`· ${todoSummary(state.todos)}`)}` : `${color.teal("●")} ${color.cream("Ready")} ${color.muted("· /help for commands")}`;
+  const queueInfo = state.pendingMessages?.length ? ` ${color.amber("↳")} ${color.cream(`${state.pendingMessages.length} queued`)}` : "";
   const lines = [
-    rule(),
-    ...(state.todos?.length ? [fullWidth(`${color.coral("▸")} ${color.cream("Task plan")} ${color.muted(`· ${todoSummary(state.todos)} · /tasks to inspect`)}`)] : []),
-    ...(state.pendingMessages?.length ? [fullWidth(`${color.amber("↳")} ${color.cream(`${state.pendingMessages.length} queued`)} ${color.muted("· waiting behind the active turn")}`)] : []),
-    fullWidth(`${color.muted(`${effort} · /effort`)} ${color.dim("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted("· /model to change")}`),
-    fullWidth(`${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("· /help for shortcuts")}`),
-    fullWidth(`${color.muted("·")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}`),
-    rule(),
+    `${top}${color.muted("─".repeat(fill))}${color.muted("╮")}`,
+    dockLine(`${taskInfo}${queueInfo}`),
+    dockLine(`${color.muted("⌁")} ${color.muted(thread)} ${contextBar(percent)} ${color.muted(`${percent}% context · /compact`)}`),
+    dockLine(state.busy ? `${color.coral("✦")} ${color.muted("Working — you can keep typing; messages will queue")}` : `${color.muted("↵")} ${color.muted("Send · / for commands · Esc Esc to exit")}`),
+    bottom,
   ];
   process.stdout.write(`\n${lines.join("\n")}\n`);
   return lines.length;
@@ -2579,7 +2501,7 @@ async function interactive(config, auth, configPath, existingState) {
   const rl = readline.createInterface({
     input,
     output,
-    prompt: color.coral("> "),
+    prompt: color.coral("  ╰─› "),
     // The CLI draws its own live, described completion strip. Returning no
     // readline completions prevents Node's default multi-line dump from
     // fighting that renderer when Tab is pressed.
@@ -2833,6 +2755,7 @@ async function interactive(config, auth, configPath, existingState) {
     if (closing || rl.closed) return;
     clearComposerFooter();
     renderComposerFooter();
+    rl.setPrompt(color.coral("  ╰─› "));
     rl.prompt();
   }
 
