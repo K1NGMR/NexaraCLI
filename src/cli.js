@@ -2659,7 +2659,13 @@ async function interactive(config, auth, configPath, existingState) {
   let railTop = null;
   let railRows = null;
   const fixedComposer = Boolean(input.isTTY && output.isTTY);
-  const terminalRows = () => Math.max(8, Number(output.rows) || 24);
+  // Match terminalWidth()'s margin below: writing to a terminal's literal
+  // last row is exactly as unreliable on Windows as writing to its literal
+  // last column. Without this, output.rows can be reported 1-2 rows taller
+  // than what is actually visible, so the bottom rule and footer -- the
+  // last two rows of the rail -- silently never appear (only the top rule
+  // and the input row, which land a row or two higher, are ever seen).
+  const terminalRows = () => Math.max(8, (Number(output.rows) || 24) - 1);
   // Four rows belong to the control rail: top rule, input, bottom rule, footer.
   // Everything above that boundary is the transcript and uses the terminal's
   // normal top-to-bottom scroll direction.
