@@ -468,12 +468,22 @@ const color = {
   white: rgb(250, 249, 245),
   blue: rgb(93, 184, 166),
   magenta: rgb(204, 120, 92),
+  neon: rgb(0, 255, 77),
+  terminalWhite: rgb(245, 245, 245),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
 // The CLI uses a small, typography-first petal mark. A multi-line pixel
 // raster consumes valuable terminal height and looked broken at non-default
 // font sizes; this stays crisp in every ANSI-capable terminal.
 const PETAL_MARK_FRAMES = ["✦", "✧", "✦", "·"];
+const NEXARA_CLI_LOGO = [
+  "███╗  ██╗ ███████╗ ██╗  ██╗  █████╗  ██████╗   █████╗       ██████╗ ██╗      ██╗",
+  "████╗ ██║ ██╔════╝ ╚██╗██╔╝ ██╔══██╗ ██╔══██╗ ██╔══██╗     ██╔════╝ ██║      ██║",
+  "██╔██╗██║ █████╗    ╚███╔╝  ███████║ ██████╔╝ ███████║     ██║      ██║      ██║",
+  "██║╚████║ ██╔══╝    ██╔██╗  ██╔══██║ ██╔══██╗ ██╔══██║     ██║      ██║      ██║",
+  "██║ ╚███║ ███████╗ ██╔╝ ██╗ ██║  ██║ ██║  ██║ ██║  ██║     ╚██████╗ ███████╗ ██║",
+  "╚═╝  ╚══╝ ╚══════╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝      ╚═════╝ ╚══════╝ ╚═╝",
+];
 
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
@@ -1035,23 +1045,24 @@ async function animateText(text, paint = color.muted) {
 }
 
 async function printBanner(config, user = null, { resumed = false } = {}) {
-  const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
-  const conversationLabel = resumed ? "Resumed conversation" : "New conversation";
+  const maxLogoWidth = Math.max(38, terminalWidth() - 2);
   console.log();
-  console.log(`  ${color.coral("✦")} ${color.cream("Nexara CLI")} ${color.muted(`v${CURRENT_VERSION}`)}`);
-  console.log(`  ${color.muted("Model")} ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort · ${conversationLabel}`)}`);
-  console.log(`  ${color.muted("Workspace")} ${color.cream(displayPath())}${user?.email ? ` ${color.muted("·")} ${color.muted(user.email)}` : ""}`);
-  console.log(`  ${color.teal("●")} ${color.cream("Ready")} ${color.muted("· 0% context · / for commands")}`);
-  const ruleWidth = Math.max(24, Math.min(128, terminalWidth() - 4));
-  console.log(`  ${color.muted("─".repeat(ruleWidth))}`);
+  // A terminal-native rendition of the reference's large outlined masthead.
+  // Keep its green edge treatment while using Nexara CLI as the only brand.
+  for (const row of NEXARA_CLI_LOGO) {
+    const fitted = row.length > maxLogoWidth ? row.slice(0, maxLogoWidth) : row;
+    console.log(`  ${color.neon(fitted)}`);
+  }
+  console.log();
+  console.log(`  ${color.terminalWhite("Nexara CLI will run commands on your behalf to help you build.")}`);
+  console.log();
+  console.log(`  ${color.terminalWhite("Directory")} ${color.muted(displayPath())}${user?.email ? ` ${color.muted("·")} ${color.muted(user.email)}` : ""}`);
   console.log();
 }
 
 function printNewConversationIntro() {
-  console.log(`  ${color.coral("✦")} ${color.cream("New conversation")}`);
-  console.log(`  ${color.muted("Ask Nexara to inspect, build, or change this workspace.")}`);
-  console.log(`  ${color.dim("Type /help for commands · M for voice input")}`);
-  console.log();
+  // The visual shell intentionally stays quiet after the masthead, matching
+  // the reference's open canvas and letting the command box be the focus.
 }
 
 function printLoginScreen() {
@@ -1267,19 +1278,19 @@ function printSessionFooter(state) {
     const label = state.busy ? "Working" : "Ready";
     statusText = `${lead} ${color.muted(label)} ${color.dim("·")} ${color.muted(`${percent}% context`)} ${color.dim("·")} ${color.muted(modelLabel(state.config.selectedModel))}`;
   }
-  // A bare rule + status line looked inconsistent next to the actual
-  // bordered panel used for sign-in/prompts (printPanel) -- frame the
-  // status the same way (╭─╮ / │ … │ / ╰─╯) so the composer reads as a
-  // real box too. Still nothing but plain line prints, erased later with
-  // an ordinary relative cursor-up-and-clear (see clearComposerFooter), so
-  // it renders the same in any terminal -- no scroll region or absolute
-  // cursor addressing involved.
-  const width = terminalWidth();
-  const innerWidth = width - 6;
-  process.stdout.write(`  ${color.muted("╭")}${color.muted("─".repeat(width - 4))}${color.muted("╮")}\n`);
-  process.stdout.write(`${panelLine(statusText, innerWidth)}\n`);
-  process.stdout.write(`  ${color.muted("╰")}${color.muted("─".repeat(width - 4))}${color.muted("╯")}\n`);
-  return 3;
+  const width = Math.max(24, terminalWidth());
+  const model = modelLabel(state.config.selectedModel);
+  const status = state.busy
+    ? `${model}  ·  working`
+    : `${model}  ·  unlimited`;
+  const fittedStatus = shorten(status, width - 2);
+  const statusLine = `${fittedStatus}${" ".repeat(Math.max(0, width - visibleLength(fittedStatus)))}`;
+  const border = "─".repeat(width);
+  // Full-width model strip and a plain rectangular composer mirror the
+  // PowerShell reference while retaining the CLI's live activity details.
+  process.stdout.write(`${ansi("48;2;47;62;84;38;2;190;202;224", statusLine)}\n`);
+  process.stdout.write(`${color.terminalWhite("┌")}${color.terminalWhite(border)}${color.terminalWhite("┐")}\n`);
+  return 2;
 }
 
 function renderTerminalInlineMarkdown(value, colorize = true) {
@@ -3141,8 +3152,8 @@ async function interactive(config, auth, configPath, existingState) {
     // Paint the entire terminal row using Erase Line under a dark surface
     // color rather than trusting `stdout.columns` (which can be wrong in
     // Windows Terminal). This is the clean, full-width command rectangle.
-    output.write("\r\u001b[48;2;54;49;45m\u001b[2K\u001b[0m\r");
-    rl.setPrompt("\u001b[48;2;54;49;45m\u001b[38;2;250;249;245m  ❯ \u001b[0m");
+    output.write("\r\u001b[2K\u001b[0m\r");
+    rl.setPrompt("\u001b[38;2;245;245;245m│ \u001b[38;2;0;255;77m❯ \u001b[0m ");
     rl.prompt();
   }
 
@@ -3151,6 +3162,14 @@ async function interactive(config, auth, configPath, existingState) {
   // show the processing and thinking animation.
   function refreshComposer() {
     if (closing || rl.closed || !composerMounted) return;
+    // Never remount readline while the user has text in the prompt. The
+    // activity timer and keypress handling share the event loop, but a
+    // clear-and-prompt cycle still changes the terminal cursor independently
+    // of readline's internal cursor model. During queued input that used to
+    // make the caret jump and could erase or reorder characters. The prompt
+    // stays untouched until the line is empty again; the animation resumes
+    // automatically after submit or Ctrl+U.
+    if (rl.line) return;
     // This is the spinner tick (every 360ms while a model turn is in
     // flight). It used to reposition the rail with absolute cursor
     // addressing, which depended on the anchored-rail approach that is gone
