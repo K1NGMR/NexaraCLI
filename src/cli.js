@@ -2451,7 +2451,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       // going still has more tool calls queued, so marking it "Completed"
       // made an in-progress multi-step task look finished after just the
       // first step.
-      if (!quiet && assistant.text?.trim()) printTurnComplete(turnStartedAt);
+      if (!quiet && assistant.text?.trim()) {
+        // The completion marker is transcript content too. Reserve its row
+        // before printing it so the next submitted message cannot be placed
+        // back on top of the marker by prepareTranscript(). This previously
+        // produced merged lines such as "[10:24 PM]d in 9s".
+        state.prepareTranscript?.(1);
+        printTurnComplete(turnStartedAt);
+      }
       conversation.push(assistant);
       await persistLocalSession(state, conversation);
       break;
