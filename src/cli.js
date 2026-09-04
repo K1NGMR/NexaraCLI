@@ -2213,6 +2213,8 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     // submitted prompt visible even when auth, thread creation, or the model
     // takes a moment, and prevents the composer redraw from hiding it.
     state.clearComposer?.();
+    const userRows = wrapChatText(trimmed).length + 4 + (files.length ? 1 : 0);
+    state.prepareTranscript?.(userRows);
     printUserTurn(trimmed, files);
     printAssistantHeader(state, mode);
     // Keep the control rail visible while the model works. The prompt remains
@@ -2389,7 +2391,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       assistant.parts = [{ type: "text", text: responseText }];
     }
     if (responseText.trim() && state.outputFormat !== "json" && !machine) {
-      process.stdout.write(`${indentAssistantText(wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: !state.quiet })))}\n`);
+      const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: !state.quiet }));
+      state.prepareTranscript?.(renderedResponse.split(/\r?\n/).length);
+      process.stdout.write(`${indentAssistantText(renderedResponse)}\n`);
     }
     if (assistant.usage) {
       state.lastUsage = assistant.usage;
@@ -2900,6 +2904,15 @@ async function interactive(config, auth, configPath, existingState) {
   // Everything above that boundary is the transcript and uses the terminal's
   // normal top-to-bottom scroll direction.
   const transcriptBottom = () => Math.max(3, terminalRows() - (COMPOSER_INPUT_ROWS + 3));
+  // The editor cursor lives inside the fixed rail. Before committing any
+  // transcript text, anchor output at the scroll region's bottom so the rail
+  // can never repaint over a just-submitted message.
+  state.prepareTranscript = (reservedRows = 1) => {
+    if (!fixedComposer || !output.isTTY) return;
+    const rows = Math.max(1, Math.min(transcriptBottom(), Number(reservedRows) || 1));
+    const start = Math.max(1, transcriptBottom() - rows + 1);
+    output.write(`\u001b[1;${transcriptBottom()}r\u001b[${start};1H`);
+  };
   let transcriptCursorSaved = false;
   let composerMounted = false;
   let slashSuggestionLines = 0;
