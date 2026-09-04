@@ -2558,6 +2558,10 @@ async function interactive(config, auth, configPath, existingState) {
     for (let index = 0; index < rows; index += 1) {
       output.write(`\r\u001b[2K${index < rows - 1 ? "\u001b[1B" : ""}`);
     }
+    // The erase loop finishes on the last footer row. Return to the original
+    // transcript row so the next user/assistant turn is committed directly
+    // below the previous content instead of after a block of blank rows.
+    if (rows > 1) output.write(`\u001b[${rows - 1}A`);
     composerFooterLines = 0;
     state.composerFooterLines = 0;
   }
