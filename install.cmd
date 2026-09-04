@@ -12,7 +12,7 @@ if errorlevel 1 (
   exit /b 1
 )
 mkdir "%TEMP_DIR%" >nul 2>nul
-curl -fL "https://github.com/K1NGMR/NexaraCLI/archive/refs/heads/main.zip?version=0.1.69" -o "%ZIP_FILE%"
+curl -fL "https://github.com/K1NGMR/NexaraCLI/archive/refs/heads/main.zip?version=0.1.70" -o "%ZIP_FILE%"
 if errorlevel 1 goto :fail
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%ZIP_FILE%' -DestinationPath '%TEMP_DIR%' -Force"
 if errorlevel 1 goto :fail

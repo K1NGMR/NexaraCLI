@@ -2198,7 +2198,7 @@ async function retryChatRequest(request, { onRetry, maxAttempts = 3 } = {}) {
   return null;
 }
 
-async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) {
+async function runPrompt(state, text, { mode, goal, files = [], onStart, alreadyRendered = false } = {}) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return null;
   state.cwd ||= process.cwd();
@@ -2208,7 +2208,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   const message = userMessage(trimmed, files);
   const machine = state.outputFormat === "stream-json";
   const quiet = Boolean(state.quiet || state.outputFormat === "json" || machine);
-  if (!quiet) {
+  if (!quiet && !alreadyRendered) {
     // Commit the user message before any network/thread setup. This keeps the
     // submitted prompt visible even when auth, thread creation, or the model
     // takes a moment, and prevents the composer redraw from hiding it.
@@ -2292,6 +2292,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     state.cancelCurrent = cancel;
     let streamedText = "";
     let responseStarted = false;
+    let responseStreamRendered = false;
     const writeText = (delta) => {
       streamedText += delta;
       if (machine) outputToolEvent(state, { type: "text-delta", delta });
@@ -2300,6 +2301,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
           responseStarted = true;
           activity.set("writing");
           setComposerActivity(state, "writing");
+        }
+        if (state.interactive) {
+          if (!responseStreamRendered) {
+            responseStreamRendered = true;
+            state.clearComposer?.();
+            state.prepareTranscript?.(1);
+          }
+          process.stdout.write(delta);
         }
       }
     };
@@ -2325,11 +2334,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
         onReasoning: (delta) => {
           state.thinkingText += delta;
           setComposerActivity(state, "thinking");
-          if (state.thinkingExpanded) {
-            state.clearComposer?.();
-            process.stdout.write(delta);
-            state.mountComposer?.();
-          }
+          // Buffer reasoning while it streams. Repainting the transcript and
+          // fixed composer for every token caused visible flicker and cursor
+          // loss; the completed block is rendered once on expand/finalize.
         },
         onToolCall: (call) => {
           activity.clear();
@@ -2387,13 +2394,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     }
     activity.clear();
     state.clearComposer?.();
+    if (responseStreamRendered) process.stdout.write("\n");
     lastAssistant = assistant;
     const responseText = assistant.text || streamedText;
     if (responseText && !assistant.text) {
       assistant.text = responseText;
       assistant.parts = [{ type: "text", text: responseText }];
     }
-    if (responseText.trim() && state.outputFormat !== "json" && !machine) {
+    if (responseText.trim() && state.outputFormat !== "json" && !machine && !responseStreamRendered) {
       const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: false }));
       const reasoning = String(state.thinkingText || "").trim();
       if (reasoning && !thinkingRendered) {
@@ -2925,6 +2933,9 @@ async function interactive(config, auth, configPath, existingState) {
   // can never repaint over a just-submitted message.
   state.prepareTranscript = (reservedRows = 1) => {
     if (!fixedComposer || !output.isTTY) return;
+    // Reconcile logical placement with rows that were printed by tools,
+    // notices, history, or other renderers outside this helper.
+    transcriptFlowRow = Math.max(transcriptFlowRow, Math.min(transcriptBottom(), realContentRows + 1));
     const rows = Math.max(1, Math.min(transcriptBottom(), Number(reservedRows) || 1));
     const start = Math.max(1, Math.min(transcriptFlowRow, transcriptBottom() - rows + 1));
     transcriptFlowRow = Math.min(transcriptBottom(), start + rows);
@@ -3243,7 +3254,7 @@ async function interactive(config, auth, configPath, existingState) {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
     const status = shorten(fixedComposerFooterLine(), width);
-    output.write(`\u001b[s\u001b[${railTop};1H\u001b[48;2;47;62;84m\u001b[38;2;190;202;224m\u001b[2K${status}\u001b[0m\u001b[u`);
+    output.write(`\u001b7\u001b[${railTop};1H\u001b[48;2;47;62;84m\u001b[38;2;190;202;224m\u001b[2K${status}\u001b[0m\u001b8`);
   }
 
   function drawFixedComposerRail({ includeInput = false } = {}) {
@@ -3372,7 +3383,7 @@ async function interactive(config, auth, configPath, existingState) {
   };
   if (typeof output.on === "function") output.on("resize", onResize);
 
-  async function runInteractiveLine(line, files) {
+  async function runInteractiveLine(line, files, options = {}) {
     activeRun = true;
     state.busy = true;
     try {
@@ -3388,7 +3399,7 @@ async function interactive(config, auth, configPath, existingState) {
           state.modalOpen = false;
         }
       } else {
-        await runPrompt(state, line, { files });
+        await runPrompt(state, line, { files, ...options });
       }
     } catch (error) {
       composerNotice(state, error instanceof Error ? error.message : String(error), "red");
@@ -3401,7 +3412,7 @@ async function interactive(config, auth, configPath, existingState) {
       }
       const next = pendingMessages.shift();
       if (next) {
-        void runInteractiveLine(next.line, next.files);
+        void runInteractiveLine(next.line, next.files, { alreadyRendered: true });
       } else {
         showComposer();
       }

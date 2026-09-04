@@ -91,18 +91,27 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       Math.max(0, cursorRow - maxRows + 1),
       Math.max(0, chunks.length - maxRows),
     );
-    const visibleChunks = chunks.slice(firstRow);
+    // Never let wrapped input escape the reserved editor viewport.
+    const visibleChunks = chunks.slice(firstRow, firstRow + maxRows);
     const visibleCursorRow = Math.max(0, cursorRow - firstRow);
     const visibleRows = Math.max(1, visibleChunks.length);
     // Return to the top of the previous render, clear only the editor rows,
     // then paint every wrapped row in one pass. No delete/reinsert blink.
     if (renderedRows > 1) output.write(`\r\u001b[${renderedRows - 1}A`);
-    for (let index = 0; index < visibleRows; index += 1) {
+    const rowsToClear = Math.max(renderedRows, visibleRows);
+    for (let index = 0; index < rowsToClear; index += 1) {
+      if (index >= visibleRows) {
+        output.write(`\r\u001b[2K`);
+        if (index < rowsToClear - 1) output.write("\n");
+        continue;
+      }
       const content = `${currentPrompt}${visibleChunks[index]}`;
-      output.write(`\r\u001b[2K${content}\u001b[s\u001b[${Math.max(1, columns - 1)}G║\u001b[u`);
+      // Use the DEC save/restore pair so the transcript's CSI save slot is
+      // never clobbered by editor redraws.
+      output.write(`\r\u001b[2K${content}\u001b7\u001b[${Math.max(1, columns - 1)}G║\u001b8`);
       if (index < visibleRows - 1) output.write("\n");
     }
-    const moveUp = visibleRows - 1 - visibleCursorRow;
+    const moveUp = rowsToClear - 1 - visibleCursorRow;
     if (moveUp) output.write(`\u001b[${moveUp}A`);
     const cursorOffset = currentPrompt.length + cursorCol;
     if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
