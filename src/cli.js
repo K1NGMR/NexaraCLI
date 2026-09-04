@@ -2981,11 +2981,20 @@ async function interactive(config, auth, configPath, existingState) {
   // show the processing and thinking animation.
   function refreshComposer() {
     if (closing || rl.closed || !fixedComposer || !composerMounted) return;
-    // The current cursor belongs to readline. Save/restore it while updating
-    // only the status rail; the input line and transcript remain untouched.
-    output.write("\u001b[s");
+    // Do NOT use the \u001b[s / \u001b[u save-restore pair here: a terminal
+    // has only one such slot, and showComposer()/clearComposerFooter() also
+    // use it to remember the transcript insertion point across rail redraws.
+    // This function fires on every spinner tick (every 360ms) while a model
+    // turn is in flight -- saving/restoring here clobbered that slot with the
+    // input row position, so by the time the response arrived and the rail
+    // tried to restore the transcript position, it landed on the input row
+    // instead and the response text was written (and lost) there. Restore
+    // the input cursor by absolute position instead, leaving the shared
+    // save slot untouched.
+    const inputRow = terminalRows() - 2;
+    const cursor = typeof rl.getCursorPos === "function" ? rl.getCursorPos() : { cols: 2 };
     drawFixedComposerRail();
-    output.write("\u001b[u");
+    output.write(`\u001b[${inputRow};${Math.max(0, Number(cursor.cols) || 0) + 1}H`);
   }
 
   state.refreshComposer = refreshComposer;
