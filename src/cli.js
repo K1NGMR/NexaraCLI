@@ -2739,6 +2739,7 @@ async function interactive(config, auth, configPath, existingState) {
   // position it was actually drawn.
   let railTop = null;
   let railRows = null;
+  let lastKnownTerminalRows = null;
   // Confirmed with real data (process.stdout.rows/columns = 51/209, both
   // correct for a fullscreen window) that the missing bottom rule/footer was
   // never a row-count problem -- every row the anchored rail computes falls
@@ -3134,12 +3135,25 @@ async function interactive(config, auth, configPath, existingState) {
     resizeSettleTimer = setTimeout(() => {
       resizeSettleTimer = null;
       if (closing || rl.closed || !composerMounted) return;
+      // If the window GREW, already-printed content doesn't retroactively
+      // expand to fill the new height -- pad the exact growth with blank
+      // lines so the box moves down to the new bottom instead of staying
+      // wherever it was with new empty room appearing below it. Shrinking
+      // needs nothing extra: the terminal already keeps showing the tail of
+      // the scrollback (the box), so it stays at the new, shorter bottom on
+      // its own.
+      const rows = terminalRows();
+      const grew = lastKnownTerminalRows != null ? rows - lastKnownTerminalRows : 0;
+      lastKnownTerminalRows = rows;
+      clearComposerFooter();
+      if (grew > 0) {
+        for (let index = 0; index < grew; index += 1) console.log();
+      }
       // Redraw the box at its new width/position so a live resize does not
       // leave a stale-width rule or status line sitting above wherever the
       // box now belongs -- this cannot use absolute addressing or a scroll
       // region (see the fixedComposer note above), so it just re-runs the
       // same relative clear-and-redraw every other update already uses.
-      clearComposerFooter();
       showComposer();
     }, 150);
   };
@@ -3228,6 +3242,14 @@ async function interactive(config, auth, configPath, existingState) {
     const pad = Math.max(0, terminalRows() - startupPrintedLines - boxRows);
     for (let index = 0; index < pad; index += 1) console.log();
   }
+  // The box is anchored to the bottom now, but only for THIS size. If the
+  // window later grows (e.g. windowed -> fullscreen), already-printed
+  // content doesn't retroactively expand to fill the new height -- the
+  // terminal just reveals more blank room below whatever was last printed,
+  // and the box stays wherever it was instead of moving down into it. The
+  // resize handler below uses this to pad exactly the growth, not a
+  // rescan of everything printed so far.
+  lastKnownTerminalRows = terminalRows();
   showComposer();
   try {
     await interactiveFinished;
