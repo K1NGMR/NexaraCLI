@@ -102,6 +102,8 @@ nexara login --qr
 
 Enter the same email and password used on Nexara Web. Use `nexara login --qr` to display a short-lived QR code and approve the CLI from a phone already signed in to Nexara. The refreshable Supabase session is stored in `%USERPROFILE%\\.nexara\\config.json` on Windows or `~/.nexara/config.json` on macOS/Linux. The file is permission-restricted where the operating system supports it. Never put a service-role key in this file.
 
+Interactive conversations are also saved locally on the computer in `%USERPROFILE%\\.nexara\\sessions\\` on Windows or `~/.nexara/sessions/` on macOS/Linux. Each session is a JSON transcript containing its remote thread ID, messages, model, working directory, and timestamps. `/threads`, `/resume`, and `nexara --continue` use this local transcript first, with the remote thread as a fallback for older conversations. Use `--no-session-persistence` for a one-off run that should not create a local transcript.
+
 Useful account commands:
 
 ```text
@@ -133,8 +135,8 @@ Interactive slash commands:
 - `/think <prompt>`, `/research <prompt>`, `/perplexity <prompt>`, `/plan <prompt>`, `/honest <prompt>` — mode shortcuts
 - `/goal <goal>` — work autonomously until `GOAL_ACHIEVED` or the safety turn cap
 - `/new` — start a new saved thread
-- `/resume [thread-id]` — resume the last or a selected thread
-- `/threads` — list recent saved threads
+- `/resume [thread-id]` — resume the last or a selected local thread
+- `/threads` — list conversations saved on this computer (and older remote threads)
 - `/clear` — clear the local context and begin a new thread
 - `/compact` — keep a compact local tail of the current context
 - `/permission [mode]` — choose `Always ask`, `Approve for me`, `Sandboxed`, or `Full access` (the older `/permissions` alias is also supported)
@@ -142,7 +144,7 @@ Interactive slash commands:
 - `/mcp`, `/skills`, `/plugins` — inspect workspace automation manifests
 - `/agents`, `/background`, `/tasks`, `/logs <id>`, `/stop <id>` — monitor or control local background work
 - `/download`, `/open <path>`, `/reveal <path>` — find and open generated artifacts
-- `/config` — show the non-secret CLI config location
+- `/config` — show the non-secret config and local session locations
 - `/status` — show session, thread, and model status
 - `/quit` or `/exit` — leave the session
 

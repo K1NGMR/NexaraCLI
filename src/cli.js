@@ -9,6 +9,7 @@ import { createThread, listThreads, loadThread, sendChat, transcribeAudio, userM
 import { loadConfig, saveConfig } from "./config.js";
 import { startMicRecording } from "./mic.js";
 import { printQr } from "./qr.js";
+import { listLocalSessions, loadLocalSession, localSessionPath, saveLocalSession, SESSION_DIR } from "./sessions.js";
 import {
   CLI_LOCAL_TOOL_NAMES,
   backgroundSummary,
@@ -406,8 +407,8 @@ const SLASH_COMMAND_DESCRIPTIONS = new Map([
   ["/honest", "Ask for a direct answer with minimal padding."],
   ["/goal", "Work autonomously toward a goal across multiple turns."],
   ["/new", "Start a fresh saved conversation."],
-  ["/resume", "Resume the last saved thread or choose a thread ID."],
-  ["/threads", "Browse recent saved conversations."],
+  ["/resume", "Resume the last saved local conversation or choose a thread ID."],
+  ["/threads", "Browse conversations saved on this computer."],
   ["/clear", "Clear local context and start a fresh thread."],
   ["/compact", "Summarize the conversation to free context space."],
   ["/config", "Show the local Nexara configuration path."],
@@ -1689,8 +1690,8 @@ ${color.cyan("Nexara CLI commands")}
   /honest <prompt>              Ask for a direct honest answer
   /goal <goal>                  Work autonomously toward a goal
   /new                          Start a fresh saved conversation
-  /resume [thread-id]           Resume the last or a selected conversation
-  /threads                      List recent saved conversations
+  /resume [thread-id]           Resume a local conversation (or remote fallback)
+  /threads                      List conversations saved on this computer
   /clear                        Clear local context and create a fresh thread
   /compact                      Summarize the conversation to free the context window
   /permission [mode]            Choose Always ask, Approve for me, Sandboxed, or Full access
@@ -1707,7 +1708,7 @@ ${color.cyan("Nexara CLI commands")}
   /download                    Show artifacts saved in .nexara-artifacts
   /open <path>                  Open a local file with the system app
   /reveal <path>                Reveal a file in Explorer/Finder
-  /config                       Show the local config path
+  /config                       Show config and local session paths
   /update                       Check for and install updates (when auto-update is off)
   /status                       Show account, model, and thread state
   /login                        Sign in again or switch account
@@ -1944,12 +1945,48 @@ async function ensureSignedIn(config, auth, useGoogle = false, useQr = false) {
   await login(config, auth, useGoogle, useQr);
 }
 
-async function ensureThread(state) {
+async function persistLocalSession(state, messages = state.messages) {
+  if (state.config.noSessionPersistence || !state.threadId) return null;
+  return saveLocalSession({
+    threadId: state.threadId,
+    title: state.sessionTitle || "New chat",
+    cwd: state.cwd,
+    model: state.config.selectedModel,
+    reasoningEffort: state.config.selectedReasoningEffort,
+    createdAt: state.sessionCreatedAt,
+    messages,
+  }).catch(() => null);
+}
+
+async function ensureThread(state, title = "New chat") {
   if (state.threadId) return;
-  const thread = await createThread(state.auth);
+  const thread = await createThread(state.auth, title);
   state.threadId = thread.id;
+  state.sessionTitle = thread.title || title;
+  state.sessionCreatedAt = thread.created_at || new Date().toISOString();
   state.messages = [];
   if (!state.config.noSessionPersistence) state.config = saveConfig({ lastThreadId: thread.id });
+}
+
+async function loadSavedThread(auth, threadId) {
+  const local = await loadLocalSession(threadId);
+  if (local) {
+    return {
+      local: true,
+      thread: {
+        id: local.threadId,
+        title: local.title || "New chat",
+        updated_at: local.updatedAt,
+      },
+      messages: local.messages,
+      cwd: local.cwd,
+      model: local.model,
+      reasoningEffort: local.reasoningEffort,
+      createdAt: local.createdAt,
+    };
+  }
+  const remote = await loadThread(auth, threadId);
+  return { local: false, ...remote };
 }
 
 function usageCost(model, usage) {
@@ -1965,7 +2002,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   state.spentCredits ||= 0;
   state.maxTurns ||= state.config.maxTurns || 25;
   state.maxBudget ??= state.config.maxBudget;
-  await ensureThread(state);
+  await ensureThread(state, trimmed.replace(/\s+/g, " "));
   const message = userMessage(trimmed, files);
   const machine = state.outputFormat === "stream-json";
   const quiet = Boolean(state.quiet || state.outputFormat === "json" || machine);
@@ -1974,6 +2011,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     printAssistantHeader(state, mode);
   }
   const conversation = [...state.messages, message];
+  await persistLocalSession(state, conversation);
   const maxTurns = Math.max(1, Math.min(100, Number(state.maxTurns ?? state.config.maxTurns ?? 25)));
   let lastAssistant = null;
   for (let turn = 1; turn <= maxTurns; turn += 1) {
@@ -2088,12 +2126,15 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     const call = assistant.nativeCall;
     if (!call || !CLI_LOCAL_TOOL_NAMES.has(call.name) && call.name !== "ask_question") {
       conversation.push(assistant);
+      await persistLocalSession(state, conversation);
       break;
     }
     conversation.push(assistant);
+    await persistLocalSession(state, conversation);
     const resultText = await runClientTool(state, call);
     outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
     conversation.push(userMessage(`<tool_result name="${call.name}">\n${resultText}\n</tool_result>`));
+    await persistLocalSession(state, conversation);
     if (state.outputFormat === "json") continue;
   }
   if (!lastAssistant) return null;
@@ -2113,6 +2154,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   } else {
     state.messages = conversation;
   }
+  await persistLocalSession(state);
   state.pendingImages = [];
   // The interactive REPL owns the transient footer. Keeping it out of the
   // turn renderer means the transcript can remain one continuous top-to-
@@ -2203,18 +2245,36 @@ async function handleSlash(state, line) {
     case "/resume": {
       const id = argument || state.config.lastThreadId;
       if (!id) { console.log("No saved conversation to resume."); return true; }
-      const loaded = await loadThread(state.auth, id);
+      const loaded = await loadSavedThread(state.auth, id);
       state.threadId = loaded.thread.id;
       state.messages = loaded.messages;
+      state.sessionTitle = loaded.thread.title || "New chat";
+      state.sessionCreatedAt = loaded.createdAt || loaded.thread.created_at || new Date().toISOString();
+      if (loaded.cwd) state.cwd = loaded.cwd;
       state.todos = [];
       state.config = saveConfig({ lastThreadId: state.threadId });
-      notice(`Resumed ${color.cream(loaded.thread.title)} · ${color.muted(state.threadId)}`);
+      await persistLocalSession(state);
+      notice(`Resumed ${loaded.local ? "local " : ""}${color.cream(loaded.thread.title)} · ${color.muted(state.threadId)}`);
       return true;
     }
     case "/threads": {
-      const threads = await listThreads(state.auth);
-      if (!threads.length) console.log("No saved conversations.");
-      for (const thread of threads) console.log(`${thread.id}  ${thread.title}`);
+      const local = state.config.noSessionPersistence ? [] : await listLocalSessions();
+      let remote = [];
+      try {
+        remote = await listThreads(state.auth);
+      } catch (error) {
+        if (!local.length) throw error;
+        notice("Could not refresh remote threads; showing local sessions.", "amber");
+      }
+      const localIds = new Set(local.map((session) => session.threadId));
+      console.log(color.dim(`Local sessions: ${SESSION_DIR}`));
+      for (const session of local) {
+        console.log(`${session.threadId}  ${session.title || "New chat"}  ${color.teal("· local")}`);
+      }
+      for (const thread of remote.filter((item) => !localIds.has(item.id))) {
+        console.log(`${thread.id}  ${thread.title || "New chat"}  ${color.dim("· remote")}`);
+      }
+      if (!local.length && !remote.length) console.log("No saved conversations.");
       return true;
     }
     case "/compact": {
@@ -2344,7 +2404,10 @@ async function handleSlash(state, line) {
       if (!argument) { console.log("Usage: /reveal <path>"); return true; }
       await runClientTool(state, { name: "RevealInExplorer", arguments: { file_path: argument } });
       return true;
-    case "/config": console.log(`Config: ${state.configPath}`); return true;
+    case "/config":
+      console.log(`Config: ${state.configPath}`);
+      console.log(`Local sessions: ${SESSION_DIR}`);
+      return true;
     case "/login": await login(state.config, state.auth); return true;
     case "/update": await runUpdateCommand([]); return true;
     case "/status": {
@@ -2360,6 +2423,7 @@ async function handleSlash(state, line) {
       console.log(`  ${color.dim("model      ")} ${modelLabel(state.config.selectedModel)}`);
       console.log(`  ${color.dim("effort     ")} ${REASONING_EFFORT_LABELS[state.config.selectedReasoningEffort] || state.config.selectedReasoningEffort}`);
       console.log(`  ${color.dim("thread     ")} ${state.threadId || "new thread"}`);
+      console.log(`  ${color.dim("storage    ")} ${state.config.noSessionPersistence ? "disabled" : `local · ${localSessionPath(state.threadId) || SESSION_DIR}`}`);
       console.log(`  ${color.dim("files      ")} ${state.pendingImages.length}`);
       console.log(`  ${color.dim("context    ")} ${formatTokens(ctxUsed)} / ${formatTokens(ctxWindow)} (${Math.min(100, Math.round((ctxUsed / ctxWindow) * 100))}%)${real ? " · exact" : " · estimate"}`);
       console.log();
@@ -2718,6 +2782,8 @@ async function oneShot(config, auth, options, configPath) {
     cwd: process.cwd(),
     threadId: null,
     messages: [],
+    sessionTitle: null,
+    sessionCreatedAt: null,
     pendingImages: images,
     todos: [],
     quiet: Boolean(options.print),
@@ -2731,9 +2797,12 @@ async function oneShot(config, auth, options, configPath) {
   if (options.continue) {
     const id = config.lastThreadId;
     if (!id) throw new Error("No previous thread to continue.");
-    const loaded = await loadThread(auth, id);
+    const loaded = await loadSavedThread(auth, id);
     state.threadId = loaded.thread.id;
     state.messages = loaded.messages;
+    state.sessionTitle = loaded.thread.title || "New chat";
+    state.sessionCreatedAt = loaded.createdAt || loaded.thread.created_at || new Date().toISOString();
+    if (loaded.cwd) state.cwd = loaded.cwd;
   }
   await runPrompt(state, prompt, { files: images });
   if (options.print) process.stdout.write("\n");
@@ -2817,12 +2886,15 @@ export async function main(argv = process.argv.slice(2)) {
   if (!(await confirmWorkspace(nextConfig))) return;
   await ensureSignedIn(nextConfig, auth, options.google, options.qr);
   if (options.continue) {
-    const state = { config: nextConfig, auth, configPath, threadId: null, messages: [], pendingImages: [], quiet: false };
+    const state = { config: nextConfig, auth, configPath, threadId: null, messages: [], sessionTitle: null, sessionCreatedAt: null, pendingImages: [], quiet: false };
     const id = nextConfig.lastThreadId;
     if (!id) throw new Error("No previous thread to continue.");
-    const loaded = await loadThread(auth, id);
+    const loaded = await loadSavedThread(auth, id);
     state.threadId = loaded.thread.id;
     state.messages = loaded.messages;
+    state.sessionTitle = loaded.thread.title || "New chat";
+    state.sessionCreatedAt = loaded.createdAt || loaded.thread.created_at || new Date().toISOString();
+    if (loaded.cwd) state.cwd = loaded.cwd;
     await interactive(nextConfig, auth, configPath, state);
     return;
   }
