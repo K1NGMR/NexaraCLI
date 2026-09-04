@@ -642,7 +642,8 @@ function clearTerminalForSession() {
   if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_CLEAR === "1") return;
   // Clear the visible viewport and scrollback so every Nexara session starts
   // as a clean workspace, while leaving the user's shell available on exit.
-  output.write("\u001b[3J\u001b[2J\u001b[H");
+  // Also reset mouse tracking left behind by an older/crashed CLI process.
+  output.write("\u001b[?1006l\u001b[?1000l\u001b[3J\u001b[2J\u001b[H");
 }
 
 function shorten(text, width) {
@@ -2738,27 +2739,20 @@ async function interactive(config, auth, configPath, existingState) {
     scheduleSlashSuggestions();
   };
 
-  // Terminals that support SGR mouse reporting send clicks as escape
-  // sequences. While a model is reasoning, a click toggles the live thinking
-  // transcript; readline continues to own all normal text input.
-  const onMouseData = (chunk) => {
-    if (!state.toggleThinking || !state.thinkingText) return;
-    const data = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk || "");
-    const click = /\u001b\[<0;\d+;\d+M/.test(data);
-    if (click) state.toggleThinking();
-  };
-
+  // Do not enable terminal mouse reporting here. Readline consumes stdin too;
+  // allowing SGR mouse mode to run beside it leaks click packets such as
+  // `0;5;6M` into the prompt. Thinking remains available through its keyboard
+  // control, while normal clicks are harmless and never become chat text.
   let mouseReporting = false;
   const setMouseReporting = (enabled) => {
-    if (!input.isTTY || !output.isTTY || mouseReporting === enabled) return;
-    mouseReporting = enabled;
-    output.write(enabled ? "\u001b[?1000h\u001b[?1006h" : "\u001b[?1006l\u001b[?1000l");
+    if (!input.isTTY || !output.isTTY || !enabled || mouseReporting) return;
+    mouseReporting = false;
+    output.write("\u001b[?1006l\u001b[?1000l");
   };
   state.setThinkingMouse = setMouseReporting;
 
   input.on("keypress", onKeypress);
   input.on("keypress", onSlashKeypress);
-  input.on("data", onMouseData);
   const pendingMessages = [];
   state.pendingMessages = pendingMessages;
   let activeRun = false;
@@ -2852,7 +2846,6 @@ async function interactive(config, auth, configPath, existingState) {
     rl.removeListener("close", onClose);
     input.removeListener("keypress", onKeypress);
     input.removeListener("keypress", onSlashKeypress);
-    input.removeListener("data", onMouseData);
     setMouseReporting(false);
     cancelSlashSuggestionTimer();
     clearSlashSuggestions(true);
