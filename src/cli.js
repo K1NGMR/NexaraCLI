@@ -2125,12 +2125,17 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     const activity = createActivityLine({
       quiet,
       streamJson: machine,
-      // Was only suppressed here on the assumption the anchored rail showed
-      // activity separately; that rail is no longer used (see the
-      // fixedComposer note in interactive()), so this inline single-line
-      // spinner -- already proven safe for one-shot/non-interactive runs --
-      // is now the activity indicator for interactive sessions too.
-      stableComposer: false,
+      // This spinner redraws on a 120ms timer, independent of readline and of
+      // every other place that touches the screen (tool-call prints, box
+      // remounts). Turning it on for interactive sessions raced against
+      // readline's own cursor tracking -- if a redraw landed between some
+      // other handler's clear and remount, the real terminal cursor and
+      // readline's internal model of where it is desynced, and typing while
+      // the AI was working landed wherever that left it instead of the input
+      // box. Suppressed here again; the box's status line still updates from
+      // the existing event-driven redraws (tool calls, etc.), just without a
+      // live spinner glyph between them.
+      stableComposer: Boolean(state.interactive),
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
       getCursorCol: () => state.getCursorCol ? state.getCursorCol() : 0,
     });

@@ -467,6 +467,35 @@ function commandName(command) {
   return path.basename(command).toLowerCase().replace(/\.cmd$|\.exe$|\.bat$/i, "");
 }
 
+// Node's fix for CVE-2024-27980 made spawning a .cmd/.bat file directly with
+// shell:false throw EINVAL on Windows -- it used to just work. npm, npx,
+// yarn, tsc, vite, eslint, and prettier are all aliased to their .cmd
+// wrapper above, so every command routed through one of them failed
+// unconditionally. shell:true is Node's documented workaround, but Node
+// itself warns that when shell:true is combined with an args ARRAY, it only
+// concatenates them without escaping -- unsafe for arguments an AI agent
+// generated. So for these files only, build one properly cmd.exe-quoted
+// command string ourselves (verified: an argument containing shell
+// metacharacters stays one literal argument, never a second command) and
+// pass shell:true with no separate args array.
+function needsWindowsCmdShell(executable) {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
+}
+
+function quoteForWindowsCmd(value) {
+  const str = String(value);
+  if (!/[\s&|<>^%"]/.test(str)) return str;
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
+function spawnPossiblyBatch(executable, args, options) {
+  if (needsWindowsCmdShell(executable)) {
+    const commandLine = [executable, ...args].map(quoteForWindowsCmd).join(" ");
+    return spawn(commandLine, { ...options, shell: true });
+  }
+  return spawn(executable, args, { ...options, shell: false });
+}
+
 async function runCommand(command, cwd, { background = false, allowOutside = false } = {}) {
   const tokens = tokenizeCommand(command);
   const outsidePaths = toolPaths("Bash", { command }, cwd);
@@ -483,9 +512,8 @@ async function runCommand(command, cwd, { background = false, allowOutside = fal
   const executable = process.platform === "win32" ? WINDOWS_COMMAND_ALIASES.get(name) || tokens[0] : tokens[0];
   if (background) {
     const id = `bg-${++backgroundSequence}`;
-    const child = spawn(executable, tokens.slice(1), {
+    const child = spawnPossiblyBatch(executable, tokens.slice(1), {
       cwd,
-      shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -506,9 +534,8 @@ async function runCommand(command, cwd, { background = false, allowOutside = fal
     return { id, pid: child.pid, command };
   }
   return await new Promise((resolve, reject) => {
-    const child = spawn(executable, tokens.slice(1), {
+    const child = spawnPossiblyBatch(executable, tokens.slice(1), {
       cwd,
-      shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
