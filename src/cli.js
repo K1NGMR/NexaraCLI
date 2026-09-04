@@ -639,7 +639,7 @@ function visibleLength(text) {
 
 function terminalWidth() {
   const columns = Number(output.columns) || 80;
-  return Math.max(64, Math.min(columns - 2, 140));
+  return Math.max(40, columns);
 }
 
 function clearTerminalForSession() {
@@ -1189,15 +1189,20 @@ function printSessionFooter(state) {
   const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
   const thread = state.threadId ? `thread ${state.threadId.slice(0, 8)}` : "new thread";
   const effort = REASONING_EFFORT_LABELS[state.config.selectedReasoningEffort] || state.config.selectedReasoningEffort;
-  const width = Math.max(20, terminalWidth() - 2);
+  const width = terminalWidth();
+  const fullWidth = (text = "") => {
+    const content = shorten(text, width);
+    return `${content}${" ".repeat(Math.max(0, width - visibleLength(content)))}`;
+  };
+  const rule = () => color.muted("─".repeat(width));
   const lines = [
-    color.muted(`  ${"─".repeat(width)}`),
-    ...(state.todos?.length ? [`  ${color.coral("▸")} ${color.cream("Task plan")} ${color.muted(`· ${todoSummary(state.todos)} · /tasks to inspect`)}`] : []),
-    ...(state.pendingMessages?.length ? [`  ${color.amber("↳")} ${color.cream(`${state.pendingMessages.length} queued`)} ${color.muted("· waiting behind the active turn")}`] : []),
-    `  ${color.muted(`${effort} · /effort`)} ${color.dim("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted("· /model to change")}`,
-    `  ${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("· /help for shortcuts")}`,
-    `  ${color.muted("·")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}`,
-    color.muted(`  ${"─".repeat(width)}`),
+    rule(),
+    ...(state.todos?.length ? [fullWidth(`${color.coral("▸")} ${color.cream("Task plan")} ${color.muted(`· ${todoSummary(state.todos)} · /tasks to inspect`)}`)] : []),
+    ...(state.pendingMessages?.length ? [fullWidth(`${color.amber("↳")} ${color.cream(`${state.pendingMessages.length} queued`)} ${color.muted("· waiting behind the active turn")}`)] : []),
+    fullWidth(`${color.muted(`${effort} · /effort`)} ${color.dim("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted("· /model to change")}`),
+    fullWidth(`${color.coral("▸")} ${color.cream("Nexara routing active")} ${color.muted("· /help for shortcuts")}`),
+    fullWidth(`${color.muted("·")} ${color.muted(`${thread}  ${contextBar(percent)}  ${percent}% context · /compact to free space`)}`),
+    rule(),
   ];
   process.stdout.write(`\n${lines.join("\n")}\n`);
   return lines.length;
@@ -2009,6 +2014,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   const machine = state.outputFormat === "stream-json";
   const quiet = Boolean(state.quiet || state.outputFormat === "json" || machine);
   if (!quiet) {
+    // Keep a prompt available while thread setup is in flight, then replace
+    // that temporary composer with the committed turn header.
+    state.clearComposer?.();
     printUserTurn(trimmed, files);
     printAssistantHeader(state, mode);
   }
@@ -2777,6 +2785,10 @@ async function interactive(config, auth, configPath, existingState) {
       showComposer();
       return;
     }
+    // Mount the next composer synchronously. Thread creation, auth refresh,
+    // and routing can all take time; the user must still be able to type and
+    // queue another message during that work.
+    showComposer();
     void runInteractiveLine(line, files);
   };
 
