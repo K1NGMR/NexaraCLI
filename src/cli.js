@@ -2024,6 +2024,8 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   await persistLocalSession(state, conversation);
   const maxTurns = Math.max(1, Math.min(100, Number(state.maxTurns ?? state.config.maxTurns ?? 25)));
   let lastAssistant = null;
+  let localToolExecuted = false;
+  let emptyContinuationRetries = 0;
   for (let turn = 1; turn <= maxTurns; turn += 1) {
     if (state.maxBudget && state.spentCredits >= state.maxBudget) {
       const messageText = `Stopped before another model turn because the $${state.maxBudget.toFixed(2)} session budget was reached.`;
@@ -2170,6 +2172,18 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     }
     if (!quiet && assistant.text?.trim()) printTurnComplete(turnStartedAt);
     const call = assistant.nativeCall;
+    // Some providers close the tool-follow-up stream with an empty assistant
+    // payload. Do not silently return the user to the prompt after local work
+    // has already happened: retry the continuation against the preserved
+    // tool result a small, bounded number of times.
+    if (!call && !responseText.trim() && localToolExecuted && emptyContinuationRetries < 2 && turn < maxTurns) {
+      emptyContinuationRetries += 1;
+      if (!quiet) notice(`The model returned an empty continuation. Retrying (${emptyContinuationRetries}/2)…`, "amber");
+      continue;
+    }
+    if (!call && !responseText.trim() && localToolExecuted && !quiet) {
+      notice("The model stopped after a local tool without sending a final response.", "red");
+    }
     if (!call || !CLI_LOCAL_TOOL_NAMES.has(call.name) && call.name !== "ask_question") {
       conversation.push(assistant);
       await persistLocalSession(state, conversation);
@@ -2178,6 +2192,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     conversation.push(assistant);
     await persistLocalSession(state, conversation);
     const resultText = await runClientTool(state, call);
+    localToolExecuted = true;
     outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
     conversation.push(userMessage(`<tool_result name="${call.name}">\n${resultText}\n</tool_result>`));
     await persistLocalSession(state, conversation);
