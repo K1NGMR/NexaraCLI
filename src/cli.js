@@ -1330,7 +1330,9 @@ function userTurnLine(text) {
 
 function printUserTurn(text, files = []) {
   console.log();
-  for (const line of wrapChatText(text)) console.log(`  ${userTurnLine(line)}`);
+  const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  console.log(`  ${color.dim(`[${stamp}]`)}`);
+  for (const line of wrapChatText(text)) console.log(`  ${color.neon("▌")} ${color.cream(line)}`);
   if (files.length) {
     console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
   }
@@ -2203,13 +2205,13 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   state.spentCompute ||= 0;
   state.maxTurns ||= state.config.maxTurns || 100;
   state.maxBudget ??= state.config.maxBudget;
-  await ensureThread(state, trimmed.replace(/\s+/g, " "));
   const message = userMessage(trimmed, files);
   const machine = state.outputFormat === "stream-json";
   const quiet = Boolean(state.quiet || state.outputFormat === "json" || machine);
   if (!quiet) {
-    // Keep a prompt available while thread setup is in flight, then replace
-    // that temporary composer with the committed turn header.
+    // Commit the user message before any network/thread setup. This keeps the
+    // submitted prompt visible even when auth, thread creation, or the model
+    // takes a moment, and prevents the composer redraw from hiding it.
     state.clearComposer?.();
     printUserTurn(trimmed, files);
     printAssistantHeader(state, mode);
@@ -2217,6 +2219,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     // usable, so a second line can be queued without disturbing the stream.
     state.mountComposer?.();
   }
+  await ensureThread(state, trimmed.replace(/\s+/g, " "));
   const conversation = [...state.messages, message];
   await persistLocalSession(state, conversation);
   // 25 (the old default) is easily exhausted by a real multi-step task --
