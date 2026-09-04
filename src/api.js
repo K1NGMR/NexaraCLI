@@ -274,6 +274,10 @@ export async function sendChat({
       // The CLI advertises itself as an agent so the server sends its compact
       // local tool set. ask_question is answered by the terminal loop below.
       "x-nexara-agent": "cli",
+      // Local tools execute relative to this exact directory. Keep the model's
+      // workspace context aligned with the client instead of making it infer a
+      // project layout from conversation history.
+      "x-nexara-cwd": process.cwd(),
     },
     signal,
     body: JSON.stringify(body),
