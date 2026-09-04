@@ -2071,7 +2071,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     const activity = createActivityLine({
       quiet,
       streamJson: machine,
-      stableComposer: Boolean(state.interactive),
+      // Previously suppressed the inline spinner whenever interactive,
+      // assuming the anchored rail showed activity separately. That rail is
+      // no longer used (see the fixedComposer note in interactive()), so the
+      // inline spinner is the only activity indicator now.
+      stableComposer: false,
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
     });
     state.thinkingText = "";
@@ -2651,7 +2655,16 @@ async function interactive(config, auth, configPath, existingState) {
   // position it was actually drawn.
   let railTop = null;
   let railRows = null;
-  const fixedComposer = Boolean(input.isTTY && output.isTTY);
+  // The anchored rail (DECSTBM scroll region + absolute cursor addressing +
+  // a single shared save/restore slot) turned out to be unreliable on
+  // Windows Terminal: it duplicated on resize, lost the assistant's response
+  // by restoring the cursor to the wrong row, made the whole rail vanish
+  // after a burst of tool-call events, and made the input caret visibly jump
+  // up and down. Always use the simpler relative-footer layout below instead
+  // (print the status line, remember how many rows it took, move the cursor
+  // up that many rows to erase it before the next print) -- it doesn't
+  // depend on scroll regions or any single shared cursor slot.
+  const fixedComposer = false;
   const terminalRows = () => Math.max(8, Number(output.rows) || 24);
   // Four rows belong to the control rail: top rule, input, bottom rule, footer.
   // Everything above that boundary is the transcript and uses the terminal's
