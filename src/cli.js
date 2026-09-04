@@ -489,6 +489,7 @@ const NEXARA_CLI_LOGO = [
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
 const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
+const COMPOSER_INPUT_ROWS = 3;
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
@@ -2840,7 +2841,7 @@ async function interactive(config, auth, configPath, existingState) {
   };
   await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
   const rl = input.isTTY && output.isTTY
-    ? createTerminalEditor({ input, output, width: terminalWidth })
+    ? createTerminalEditor({ input, output, width: () => Math.max(24, Number(output.columns) || 80), rows: () => COMPOSER_INPUT_ROWS })
     : readline.createInterface({
       input,
       output,
@@ -2893,10 +2894,11 @@ async function interactive(config, auth, configPath, existingState) {
   // last two rows of the rail -- silently never appear (only the top rule
   // and the input row, which land a row or two higher, are ever seen).
   const terminalRows = () => Math.max(8, (Number(output.rows) || 24) - 1);
-  // Four rows belong to the control rail: top rule, input, bottom rule, footer.
+  // The rail owns a status row, a frame row, a three-row wrapping editor, and
+  // a bottom frame row. Chat output is constrained above this boundary.
   // Everything above that boundary is the transcript and uses the terminal's
   // normal top-to-bottom scroll direction.
-  const transcriptBottom = () => Math.max(3, terminalRows() - 4);
+  const transcriptBottom = () => Math.max(3, terminalRows() - (COMPOSER_INPUT_ROWS + 3));
   let transcriptCursorSaved = false;
   let composerMounted = false;
   let slashSuggestionLines = 0;
@@ -2924,7 +2926,9 @@ async function interactive(config, auth, configPath, existingState) {
       const preserveCurrentCursor = !transcriptCursorSaved;
       if (preserveCurrentCursor) output.write("\u001b[s");
       // Erase only the reserved rail. Never clear the transcript viewport.
-      output.write(`\u001b[${top};1H\u001b[2K\u001b[${top + 1};1H\u001b[2K\u001b[${rows - 1};1H\u001b[2K\u001b[${rows};1H\u001b[2K\u001b[0m`);
+      output.write("\u001b[r");
+      for (let row = top; row <= rows; row += 1) output.write(`\u001b[${row};1H\u001b[2K`);
+      output.write("\u001b[0m");
       // `showComposer` saves the transcript position before moving to the
       // fixed controls. Restore it so the next user/assistant turn appends
       // directly after the header instead of jumping to the lower boundary.
@@ -3203,6 +3207,14 @@ async function interactive(config, auth, configPath, existingState) {
     return `${left}${" ".repeat(gap)}${fittedEnd}`;
   }
 
+  function refreshFixedStatus() {
+    if (!composerMounted || railTop == null) return;
+    const columns = Math.max(20, Number(output.columns) || 80);
+    const width = Math.max(20, columns - 1);
+    const status = shorten(fixedComposerFooterLine(), width);
+    output.write(`\u001b[s\u001b[${railTop};1H\u001b[48;2;47;62;84m\u001b[38;2;190;202;224m\u001b[2K${status}\u001b[0m\u001b[u`);
+  }
+
   function drawFixedComposerRail({ includeInput = false } = {}) {
     const rows = terminalRows();
     const top = transcriptBottom() + 1;
@@ -3211,7 +3223,7 @@ async function interactive(config, auth, configPath, existingState) {
     railRows = rows;
     railTop = top;
     const borderRow = top + 1;
-    const inputRow = top + 2;
+    const inputStartRow = top + 2;
     const bottomRuleRow = rows;
     const width = Math.max(20, Number(output.columns) || 80);
     // Keep every draw one column short of the terminal edge so Windows
@@ -3221,7 +3233,9 @@ async function interactive(config, auth, configPath, existingState) {
     output.write(`\u001b[${top};1H\u001b[48;2;47;62;84m\u001b[38;2;190;202;224m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
     output.write(`\u001b[${borderRow};1H\u001b[2K${color.terminalWhite(`╔${frame}╗`)}`);
     if (includeInput) {
-      output.write(`\u001b[${inputRow};1H\u001b[2K${color.terminalWhite(`║${" ".repeat(Math.max(1, frameWidth - 2))}║`)}\u001b[0m`);
+      for (let row = inputStartRow; row < bottomRuleRow; row += 1) {
+        output.write(`\u001b[${row};1H\u001b[2K${color.terminalWhite(`║${" ".repeat(Math.max(1, frameWidth - 2))}║`)}\u001b[0m`);
+      }
     }
     output.write(`\u001b[${bottomRuleRow};1H\u001b[2K${color.terminalWhite(`╚${frame}╝`)}\u001b[0m`);
   }
@@ -3266,6 +3280,12 @@ async function interactive(config, auth, configPath, existingState) {
   // show the processing and thinking animation.
   function refreshComposer() {
     if (closing || rl.closed || !composerMounted) return;
+    // Spinner/status ticks must never erase and repaint the Chatbox. Update
+    // only the reserved status row; transcript and input pixels stay put.
+    if (fixedComposer) {
+      refreshFixedStatus();
+      return;
+    }
     // Never remount readline while the user has text in the prompt. The
     // activity timer and keypress handling share the event loop, but a
     // clear-and-prompt cycle still changes the terminal cursor independently
@@ -3463,7 +3483,10 @@ async function oneShot(config, auth, options, configPath) {
     state.messages = loaded.messages;
     state.sessionTitle = loaded.thread.title || "New chat";
     state.sessionCreatedAt = loaded.createdAt || loaded.thread.created_at || new Date().toISOString();
-    if (loaded.cwd) state.cwd = loaded.cwd;
+    // The directory where this process was launched is authoritative for the
+    // current run. A saved thread's cwd is historical metadata; restoring it
+    // here made tools inspect a different project when `--continue` was run
+    // from a new folder.
   }
   await runPrompt(state, prompt, { files: images });
   if (options.print) process.stdout.write("\n");
@@ -3555,7 +3578,8 @@ export async function main(argv = process.argv.slice(2)) {
     state.messages = loaded.messages;
     state.sessionTitle = loaded.thread.title || "New chat";
     state.sessionCreatedAt = loaded.createdAt || loaded.thread.created_at || new Date().toISOString();
-    if (loaded.cwd) state.cwd = loaded.cwd;
+    // Keep the launch directory authoritative. The saved cwd describes where
+    // the earlier turn ran and must not silently redirect local tools now.
     await interactive(nextConfig, auth, configPath, state);
     return;
   }

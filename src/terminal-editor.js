@@ -4,7 +4,7 @@ import { emitKeypressEvents } from "node:readline";
 // A small terminal editor for Windows Terminal/conhost. It deliberately owns
 // every byte in the input row; readline is excellent for pipes, but its line
 // wrapping and cursor bookkeeping are what caused the Chatbox to be clipped.
-export function createTerminalEditor({ input, output, width = () => 80 }) {
+export function createTerminalEditor({ input, output, width = () => 80, rows = () => 3 }) {
   const events = new EventEmitter();
   let line = "";
   let cursor = 0;
@@ -13,6 +13,7 @@ export function createTerminalEditor({ input, output, width = () => 80 }) {
   let questionRejecter = null;
   let currentPrompt = "║ ❯ ";
   let rawBefore = false;
+  let renderedRows = 1;
 
   const editor = {
     get line() { return line; },
@@ -69,12 +70,32 @@ export function createTerminalEditor({ input, output, width = () => 80 }) {
     if (closed) return;
     const columns = Math.max(24, Number(width()) || 80);
     const available = Math.max(1, columns - currentPrompt.length - 3);
-    const visible = line.length > available ? line.slice(Math.max(0, cursor - available), Math.max(0, cursor - available) + available) : line;
-    const cursorInVisible = line.length > available ? Math.min(available, cursor) : cursor;
-    const content = `${currentPrompt}${visible}`;
-    output.write(`\r\u001b[2K${content}`);
-    const right = Math.max(0, content.length - currentPrompt.length - cursorInVisible);
-    if (right) output.write(`\u001b[${right}D`);
+    const maxRows = Math.max(1, Number(rows()) || 3);
+    const chunks = [];
+    for (let index = 0; index < line.length; index += available) chunks.push(line.slice(index, index + available));
+    if (!chunks.length) chunks.push("");
+    const cursorRow = Math.min(chunks.length - 1, Math.floor(cursor / available));
+    const cursorCol = Math.min(available, cursor - cursorRow * available);
+    const firstRow = Math.min(
+      Math.max(0, cursorRow - maxRows + 1),
+      Math.max(0, chunks.length - maxRows),
+    );
+    const visibleChunks = chunks.slice(firstRow);
+    const visibleCursorRow = Math.max(0, cursorRow - firstRow);
+    const visibleRows = Math.max(1, visibleChunks.length);
+    // Return to the top of the previous render, clear only the editor rows,
+    // then paint every wrapped row in one pass. No delete/reinsert blink.
+    if (renderedRows > 1) output.write(`\r\u001b[${renderedRows - 1}A`);
+    for (let index = 0; index < visibleRows; index += 1) {
+      const content = `${currentPrompt}${visibleChunks[index]}`;
+      output.write(`\r\u001b[2K${content}\u001b[s\u001b[${Math.max(1, columns - 1)}G║\u001b[u`);
+      if (index < visibleRows - 1) output.write("\n");
+    }
+    const moveUp = visibleRows - 1 - visibleCursorRow;
+    if (moveUp) output.write(`\u001b[${moveUp}A`);
+    const cursorOffset = currentPrompt.length + cursorCol;
+    if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
+    renderedRows = visibleRows;
   }
 
   function submit() {
