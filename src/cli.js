@@ -449,8 +449,6 @@ const color = {
   coral: rgb(204, 120, 92),
   coralActive: rgb(169, 88, 62),
   cream: rgb(250, 249, 245),
-  violet: rgb(154, 91, 230),
-  pink: rgb(239, 117, 205),
   muted: rgb(160, 157, 150),
   teal: rgb(93, 184, 166),
   amber: rgb(232, 165, 90),
@@ -468,7 +466,7 @@ const ANSI_RE = /\u001b\[[0-9;]*m/g;
 // The CLI uses a small, typography-first petal mark. A multi-line pixel
 // raster consumes valuable terminal height and looked broken at non-default
 // font sizes; this stays crisp in every ANSI-capable terminal.
-const PETAL_MARK_FRAMES = ["✦", "✧", "✺", "✧"];
+const PETAL_MARK_FRAMES = ["✦", "✧", "✦", "·"];
 
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 
@@ -507,7 +505,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     visible = true;
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
     const glyph = ACTIVITY_FRAMES[frame % ACTIVITY_FRAMES.length];
-    const paint = [color.coral, color.violet, color.pink, color.teal][frame % 4];
+    const paint = [color.coral, color.amber, color.teal, color.coral][frame % 4];
     const line = `\r\u001b[2K  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`;
     const offset = Math.max(0, Number(getCursorOffset()) || 0);
     if (offset) output.write(`\u001b[${offset}A${line}\u001b[${offset}B`);
@@ -771,18 +769,18 @@ function todoSummary(todos) {
 
 function printTodoList(todos, { compact = false } = {}) {
   if (!Array.isArray(todos) || !todos.length) return;
-  const contentWidth = Math.max(24, terminalWidth() - (compact ? 12 : 14));
-  const heading = compact ? "Task plan" : "Task plan · live";
-  console.log(`  ${color.coral("╭─")} ${color.cream(heading)} ${color.dim(`· ${todoSummary(todos)}`)}`);
+  const contentWidth = Math.max(24, terminalWidth() - 8);
+  const heading = compact ? "Plan" : "Plan updated";
+  console.log(`\n  ${color.coral("✦")} ${color.cream(heading)} ${color.muted(`· ${todoSummary(todos)}`)}`);
   todos.forEach((todo, index) => {
     const rows = wrapChatText(todo.content, contentWidth);
     const marker = todoStatusGlyph(todo.status);
     rows.forEach((row, rowIndex) => {
-      const prefix = rowIndex === 0 ? `${marker} ${index + 1}. ` : "  │   ";
-      console.log(`  ${color.muted("│")} ${prefix}${color.cream(row)}`);
+      const prefix = rowIndex === 0 ? `${marker} ${color.muted(`${index + 1}.`)} ` : "      ";
+      console.log(`    ${prefix}${color.cream(row)}`);
     });
   });
-  console.log(`  ${color.muted("╰─")} ${color.dim("updated by TodoWrite")}`);
+  console.log(`  ${color.dim("  Updated by Nexara")}`);
 }
 
 function outputToolEvent(state, event) {
@@ -938,7 +936,7 @@ async function saveServerArtifact(state, name, output) {
 
 function petalMark(frameIndex = 0) {
   const glyph = PETAL_MARK_FRAMES[frameIndex % PETAL_MARK_FRAMES.length];
-  return `${color.violet(glyph)}${color.pink("✦")}`;
+  return color.coral(glyph);
 }
 
 function nexaraWordmark(frameIndex = 0) {
@@ -976,11 +974,12 @@ async function animateText(text, paint = color.muted) {
 async function printBanner(config, user = null) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
   const account = user?.email || "Nexara account";
-  // Keep startup concise: the conversation begins at the top of a freshly
-  // cleared terminal instead of below a marketing-sized banner.
-  console.log(`  ${nexaraWordmark()} ${color.muted(`CLI v${CURRENT_VERSION}`)}`);
-  console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort · ${account}`)}`);
-  console.log(`  ${color.teal("●")} ${color.cream("Workspace ready")} ${color.muted(`· ${displayPath()} · /help`)}`);
+  const divider = color.muted("─".repeat(Math.max(24, terminalWidth() - 4)));
+  console.log(`  ${nexaraWordmark()} ${color.muted(`CLI ${CURRENT_VERSION}`)}`);
+  console.log(`  ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort`)}`);
+  console.log(`  ${color.teal("●")} ${color.muted("Signed in as")} ${color.cream(account)}`);
+  console.log(`  ${color.muted("⌁")} ${color.muted("Workspace")} ${color.cream(displayPath())} ${color.muted("· /help")}`);
+  console.log(`  ${divider}`);
   console.log();
 }
 
@@ -1133,29 +1132,25 @@ function wrapChatText(text, width = Math.max(24, terminalWidth() - 6)) {
 }
 
 function userTurnLine(text) {
-  const width = Math.max(20, terminalWidth());
-  const visible = String(text || "").slice(0, Math.max(1, width - 2));
-  const padded = ` ${visible}` + " ".repeat(Math.max(0, width - visible.length - 1));
-  return ansi("48;2;54;49;45;38;2;250;249;245", padded);
+  return `${color.coral("›")} ${color.cream(text)}`;
 }
 
 function printUserTurn(text, files = []) {
   console.log();
-  for (const line of wrapChatText(text)) console.log(userTurnLine(`> ${line}`));
+  for (const line of wrapChatText(text)) console.log(`  ${userTurnLine(line)}`);
   if (files.length) {
-    console.log(`  ${color.muted("  attachments")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
+    console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
   }
 }
 
 function printAssistantHeader(state, mode) {
   const modeLabel = mode ? ` · ${mode}` : "";
-  process.stdout.write(`\n${color.coral("●")} ${color.cream("Nexara")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
+  process.stdout.write(`\n  ${color.coral("✦")} ${color.cream("Nexara")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
 }
 
 function printTurnComplete(startedAt) {
   const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-  const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
-  console.log(color.dim(`* Worked for ${elapsedSeconds}s · done ${clock}`));
+  console.log(`  ${color.muted("—")} ${color.dim(`Completed in ${elapsedSeconds}s`)}`);
 }
 
 function printSessionFooter(state) {
@@ -1163,25 +1158,17 @@ function printSessionFooter(state) {
   const ctxUsed = real ?? contextOf(state.messages);
   const ctxWindow = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
   const percent = Math.min(100, Math.round((ctxUsed / ctxWindow) * 100));
-  const thread = state.threadId ? `thread ${state.threadId.slice(0, 8)}` : "new thread";
   const effort = REASONING_EFFORT_LABELS[state.config.selectedReasoningEffort] || state.config.selectedReasoningEffort;
   const width = terminalWidth();
-  const innerWidth = Math.max(30, width - 6);
-  const dockLine = (text = "") => {
-    const content = shorten(text, innerWidth);
-    return `  ${color.muted("│")} ${content}${" ".repeat(Math.max(0, innerWidth - visibleLength(content)))} ${color.muted("│")}`;
-  };
-  const top = `  ${color.muted("╭")}${color.coral("─")} ${color.cream("Nexara chat")} ${color.muted("·")} ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted(`· ${effort} effort`)}`;
-  const fill = Math.max(0, width - visibleLength(top) - 1);
-  const bottom = `  ${color.muted("╰")}${color.muted("─".repeat(width - 4))}${color.muted("╯")}`;
-  const taskInfo = state.todos?.length ? `${color.coral("●")} ${color.cream("Task plan")} ${color.muted(`· ${todoSummary(state.todos)}`)}` : `${color.teal("●")} ${color.cream("Ready")} ${color.muted("· /help for commands")}`;
-  const queueInfo = state.pendingMessages?.length ? ` ${color.amber("↳")} ${color.cream(`${state.pendingMessages.length} queued`)}` : "";
+  const rule = color.muted("─".repeat(Math.max(24, width - 4)));
+  const taskInfo = state.todos?.length ? `${color.coral("●")} ${color.cream("Plan")} ${color.muted(todoSummary(state.todos))}` : `${color.teal("●")} ${color.cream("Ready")}`;
+  const queueInfo = state.pendingMessages?.length ? ` ${color.amber("·")} ${color.cream(`${state.pendingMessages.length} queued`)}` : "";
+  const threadInfo = state.threadId ? `Thread ${state.threadId.slice(0, 8)}` : "New conversation";
   const lines = [
-    `${top}${color.muted("─".repeat(fill))}${color.muted("╮")}`,
-    dockLine(`${taskInfo}${queueInfo}`),
-    dockLine(`${color.muted("⌁")} ${color.muted(thread)} ${contextBar(percent)} ${color.muted(`${percent}% context · /compact`)}`),
-    dockLine(state.busy ? `${color.coral("✦")} ${color.muted("Working — you can keep typing; messages will queue")}` : `${color.muted("↵")} ${color.muted("Send · / for commands · Esc Esc to exit")}`),
-    bottom,
+    `  ${rule}`,
+    `  ${color.cream(modelLabel(state.config.selectedModel))} ${color.muted(`· ${effort} effort · ${threadInfo}`)}`,
+    `  ${taskInfo}${queueInfo} ${color.muted("·")} ${color.muted(`${contextBar(percent)} ${percent}% context`)}`,
+    `  ${state.busy ? color.coral("✦") : color.muted("↵")} ${color.muted(state.busy ? "Working — keep typing to queue a message" : "Send · / commands · Esc Esc exits")}`,
   ];
   // The footer is mounted immediately after the assistant header. A leading
   // newline here becomes an untracked spacer row; when the footer is erased
@@ -1274,6 +1261,18 @@ function renderTerminalMarkdown(text, { colorize = true } = {}) {
     rendered.push(renderTerminalInlineMarkdown(sourceLine, colorize));
   }
   return rendered.join("\n").replace(/\n+$/, "");
+}
+
+function wrapRenderedTerminalMarkdown(text) {
+  const width = Math.max(20, terminalWidth() - 2);
+  return String(text || "").split("\n").flatMap((line) => {
+    if (!line) return [""];
+    if (visibleLength(line) <= width) return [line];
+    // Markdown has already been rendered and may contain ANSI styling. Use a
+    // plain-width wrap here rather than letting the terminal soft-wrap it,
+    // which would break the transcript's visual rhythm and picker geometry.
+    return wrapChatText(line.replace(ANSI_RE, ""), width);
+  }).join("\n");
 }
 
 function modelLabel(id) {
@@ -2011,7 +2010,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       state.clearComposer?.();
       activity.clear();
       if (state.thinkingExpanded) {
-        console.log(`\n  ${color.violet("Thinking · live")}`);
+        console.log(`\n  ${color.coral("✦")} ${color.cream("Thinking")}`);
         console.log(color.dim("  Click again to collapse · the text below is the model's emitted reasoning."));
         process.stdout.write(`${state.thinkingText || "(waiting for reasoning…)"}\n`);
       } else {
@@ -2128,7 +2127,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       assistant.parts = [{ type: "text", text: responseText }];
     }
     if (responseText.trim() && state.outputFormat !== "json" && !machine) {
-      process.stdout.write(`${renderTerminalMarkdown(responseText, { colorize: !state.quiet })}\n`);
+      process.stdout.write(`${wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: !state.quiet }))}\n`);
     }
     if (assistant.usage) {
       state.lastUsage = assistant.usage;

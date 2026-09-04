@@ -31,11 +31,13 @@ you to trust it before continuing. Press `y` to remember that folder, or press
 Enter to exit. Set `NEXARA_SKIP_WORKSPACE_TRUST=1` for non-interactive local
 environments where the folder is already trusted by your own tooling.
 
-Interactive startup clears the terminal viewport, shows an animated pixel-art
-Nexara Petal mascot, and offers live described slash-command suggestions as you
-type. Set `NEXARA_NO_ANIMATION=1` when using a slow terminal, screen reader, or
-automated environment; set `NEXARA_NO_CLEAR=1` to keep the existing terminal
-scrollback.
+Interactive startup clears the terminal viewport into a calm, compact session
+layout: model and workspace details sit at the top, conversation turns stay
+clean, and a small composer rail keeps plan, queue, and context status visible
+without covering the transcript. It also offers live slash-command suggestions
+as you type. Set `NEXARA_NO_ANIMATION=1` when using a slow terminal, screen
+reader, or automated environment; set `NEXARA_NO_CLEAR=1` to keep the existing
+terminal scrollback.
 
 If you prefer the npm registry after the package is published:
 

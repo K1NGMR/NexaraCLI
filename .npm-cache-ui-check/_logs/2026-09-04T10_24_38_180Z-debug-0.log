@@ -1,0 +1,19 @@
+0 verbose cli C:\Program Files\nodejs\node.exe C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js
+1 info using npm@11.12.1
+2 info using node@v24.15.0
+3 silly config load:file:C:\Program Files\nodejs\node_modules\npm\npmrc
+4 silly config load:file:C:\Users\Liquade\Documents\NexaraStuffs\NexeraCLI\.npmrc
+5 silly config load:file:C:\Users\Liquade\.npmrc
+6 silly config load:file:C:\Users\Liquade\AppData\Roaming\npm\etc\npmrc
+7 verbose title npm run pack:check
+8 verbose argv "run" "pack:check"
+9 verbose logfile logs-max:10 dir:C:\Users\Liquade\Documents\NexaraStuffs\NexeraCLI\.npm-cache-ui-check\_logs\2026-09-04T10_24_38_180Z-
+10 verbose logfile C:\Users\Liquade\Documents\NexaraStuffs\NexeraCLI\.npm-cache-ui-check\_logs\2026-09-04T10_24_38_180Z-debug-0.log
+11 silly logfile done cleaning log files
+12 http fetch GET https://registry.npmjs.org/npm attempt 1 failed with EACCES
+13 verbose cwd C:\Users\Liquade\Documents\NexaraStuffs\NexeraCLI
+14 verbose os Windows_NT 10.0.26200
+15 verbose node v24.15.0
+16 verbose npm  v11.12.1
+17 verbose exit 0
+18 info ok
