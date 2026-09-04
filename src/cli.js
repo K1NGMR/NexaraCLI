@@ -440,7 +440,14 @@ const SLASH_COMMAND_DESCRIPTIONS = new Map([
   ["/exit", "Exit Nexara."],
 ]);
 
-const ansi = (code, text) => `\u001b[${code}m${text}\u001b[0m`;
+// Keep human-friendly styling in interactive terminals, but never leak ANSI
+// control sequences into pipes, CI logs, or users who explicitly opt out.
+// This follows the convention used by mature CLIs: `NO_COLOR` wins, while
+// `FORCE_COLOR=1` is available for snapshots and intentionally styled pipes.
+const colorEnabled = process.env.NO_COLOR === undefined
+  && process.env.TERM !== "dumb"
+  && (Boolean(output.isTTY) || process.env.FORCE_COLOR === "1");
+const ansi = (code, text) => colorEnabled ? `\u001b[${code}m${text}\u001b[0m` : String(text);
 const rgb = (red, green, blue) => (text) => ansi(`38;2;${red};${green};${blue}`, text);
 // The CLI uses Nexara's warm dark-surface palette: cream text, coral action,
 // teal for healthy state, and amber for attention. It deliberately avoids the
@@ -1755,6 +1762,7 @@ function renderSlashSuggestions(line, activeIndex = -1) {
 function printHelp() {
   console.log(`
 ${color.cyan("Nexara CLI commands")}
+  ${color.muted("Chat & models")}
   /help                         Show this help
   /model [name|id]              List or switch models
   /effort [level]               Set GPT-5.6 reasoning effort (low/medium/high/xhigh=Extra High/max)
@@ -1768,11 +1776,13 @@ ${color.cyan("Nexara CLI commands")}
   /plan <prompt>                Plan & validate a project (searches feasibility, profitability, risks)
   /honest <prompt>              Ask for a direct honest answer
   /goal <goal>                  Work autonomously toward a goal
+  ${color.muted("Conversations")}
   /new                          Start a fresh saved conversation
   /resume [thread-id]           Resume a local conversation (or remote fallback)
   /threads                      List conversations saved on this computer
   /clear                        Clear local context and create a fresh thread
   /compact                      Summarize the conversation to free the context window
+  ${color.muted("Workspace & automation")}
   /permission [mode]            Choose Always ask, Approve for me, Sandboxed, or Full access
   /permissions [mode]           Alias for /permission
   /tools                        Show the tools available to this CLI session
@@ -1789,15 +1799,17 @@ ${color.cyan("Nexara CLI commands")}
   /reveal <path>                Reveal a file in Explorer/Finder
   /doctor                       Diagnose CLI, workspace, account, and API setup
   /config                       Show config and local session paths
+  ${color.muted("Account & exit")}
   /update                       Check for and install updates (when auto-update is off)
   /status                       Show account, model, and thread state
   /login                        Sign in again or switch account
   /quit                         Exit the CLI
 
-${color.dim("Voice: press M at the prompt to record your mic; press M again to")}
+${color.dim("Voice: press M at an empty prompt to record your mic; press M again to")}
 ${color.dim("stop and transcribe your words into the input (speech-to-text).")}
 ${color.dim("Thinking: click the live Thinking indicator to expand the model's emitted reasoning.")}
-${color.dim("Tip: type / and press Tab to autocomplete commands; use ↑/↓ or numpad arrows to browse history.")}
+${color.dim("Tip: type / and press Tab to autocomplete; use ↑/↓ or numpad arrows to browse.")}
+${color.dim("Pipes: set NO_COLOR=1 for plain output, or use --output-format json|stream-json for automation.")}
 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
 ${color.dim("Updates: nexara update (install now), nexara update --on / --off (toggle silent background updates)")}

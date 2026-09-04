@@ -39,6 +39,11 @@ as you type. Set `NEXARA_NO_ANIMATION=1` when using a slow terminal, screen
 reader, or automated environment; set `NEXARA_NO_CLEAR=1` to keep the existing
 terminal scrollback.
 
+Interactive output keeps the Nexara palette and keyboard-first command
+discovery. For scripts, CI, or redirected help output, set `NO_COLOR=1` to
+disable ANSI styling; `--output-format json` and `stream-json` remain the
+machine-readable interfaces.
+
 If you prefer the npm registry after the package is published:
 
 ```powershell
