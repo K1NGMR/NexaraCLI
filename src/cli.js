@@ -781,15 +781,15 @@ function printToolCall(call, { streamJson = false } = {}) {
 function printToolResult(name, result, { error = false, streamJson = false } = {}) {
   const text = String(result || "").trim();
   if (streamJson) return;
-  const firstLine = text.split(/\r?\n/)[0] || "completed";
   const label = error ? color.red("×") : color.teal("✓");
-  console.log(`  ${color.muted("╰─")} ${label} ${color.muted(shorten(firstLine, Math.max(32, terminalWidth() - 12)))}`);
-  const detailed = new Set(["Bash", "TypeCheck", "LspDiagnostics", "BackgroundOutput", "GitDiff", "GitStatus", "GitLog", "SymbolSearch", "FindReferences", "CodeOutline", "ImportGraph", "DependencyTree", "DeadCodeScan"]);
-  if (detailed.has(String(name)) && text.includes("\n")) {
-    const lines = text.split(/\r?\n/).slice(1, 9);
-    for (const line of lines) console.log(`     ${color.dim(shorten(line, Math.max(32, terminalWidth() - 9)))}`);
-    if (text.split(/\r?\n/).length > 9) console.log(`     ${color.dim("… more output available through /logs or the next tool turn")}`);
-  }
+  const lines = text ? wrapChatText(text, Math.max(32, terminalWidth() - 9)) : ["completed"];
+  // Tool output is part of the transcript, not a one-line status preview.
+  // The old renderer silently kept only the first line for most tools and
+  // capped the rest at eight lines for a small allow-list, which made tools
+  // such as ListFiles look as if they returned only one result. Render every
+  // returned line, wrapping long lines to the current terminal width.
+  console.log(`  ${color.muted("╰─")} ${label} ${color.muted(String(name))}`);
+  for (const line of lines) console.log(`     ${color.dim(line)}`);
 }
 
 function normalizeCliTodos(rawTodos) {
@@ -1046,6 +1046,14 @@ async function animateText(text, paint = color.muted) {
 
 async function printBanner(config, user = null, { resumed = false } = {}) {
   const maxLogoWidth = Math.max(38, terminalWidth() - 2);
+  // On a fresh session, keep the welcome mark visually connected to the
+  // composer instead of pinning it to the top of an otherwise-empty window.
+  // Once a conversation exists, transcript history owns that vertical space.
+  if (!resumed && output.isTTY) {
+    const rows = Math.max(18, Number(output.rows) || 24);
+    const spacerRows = Math.max(0, rows - 18);
+    for (let index = 0; index < spacerRows; index += 1) console.log();
+  }
   console.log();
   // A terminal-native rendition of the reference's large outlined masthead.
   // Keep its green edge treatment while using Nexara CLI as the only brand.
@@ -2770,20 +2778,10 @@ async function interactive(config, auth, configPath, existingState) {
   // position it was actually drawn.
   let railTop = null;
   let railRows = null;
-  // Confirmed with real data (process.stdout.rows/columns = 51/209, both
-  // correct for a fullscreen window) that the missing bottom rule/footer was
-  // never a row-count problem -- every row the anchored rail computes falls
-  // well inside that range. Three attempts targeting the DECSTBM scroll
-  // region (a resize-safe redraw, drawing before/after setting the region,
-  // a row safety margin) still left it broken. The user's terminal here is
-  // legacy Windows PowerShell console (conhost.exe), not Windows Terminal --
-  // conhost's DECSTBM support is known to be unreliable, which is a
-  // different class of problem no amount of row/column math fixes. Always
-  // use the simple relative-footer layout instead (draw the box using
-  // ordinary line prints and relative cursor-up motions -- see
-  // renderComposerFooter/clearComposerFooter below), which needs no scroll
-  // region and works the same in any terminal.
-  const fixedComposer = false;
+  // The composer is a real terminal region, not transcript output. This is
+  // the key invariant that prevents autocomplete, resize and streamed output
+  // from ever cutting through the input surface in Windows Terminal.
+  const fixedComposer = Boolean(input.isTTY && output.isTTY);
   // Match terminalWidth()'s margin below: writing to a terminal's literal
   // last row is exactly as unreliable on Windows as writing to its literal
   // last column. Without this, output.rows can be reported 1-2 rows taller
@@ -3086,19 +3084,19 @@ async function interactive(config, auth, configPath, existingState) {
 
   function fixedComposerFooter() {
     const model = color.muted(modelLabel(state.config.selectedModel));
-    const details = state.busy ? color.muted("· Ctrl+C cancel · type to queue") : color.muted("· /help for commands");
+    const details = state.busy ? color.muted("Compute Limit · Ctrl+C cancels") : color.muted("Compute Limit · / opens commands");
     return `${model} ${details}`;
   }
 
   function fixedComposerFooterLine() {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
-    const left = shorten(`  ${fixedComposerStatus()}`, Math.max(8, width - 2));
-    const right = fixedComposerFooter();
-    const availableRight = Math.max(0, width - visibleLength(left) - 2);
-    const fittedRight = availableRight ? shorten(right, availableRight) : "";
-    const gap = Math.max(2, width - visibleLength(left) - visibleLength(fittedRight));
-    return `${left}${" ".repeat(gap)}${fittedRight}`;
+    const left = shorten(`  ${fixedComposerStatus()}  ${fixedComposerFooter()}`, Math.max(8, width - 2));
+    const end = color.muted("× End session");
+    const availableEnd = Math.max(0, width - visibleLength(left) - 2);
+    const fittedEnd = availableEnd ? shorten(end, availableEnd) : "";
+    const gap = Math.max(2, width - visibleLength(left) - visibleLength(fittedEnd));
+    return `${left}${" ".repeat(gap)}${fittedEnd}`;
   }
 
   function drawFixedComposerRail({ includeInput = false } = {}) {
@@ -3108,18 +3106,20 @@ async function interactive(config, auth, configPath, existingState) {
     // run after a resize changes terminalRows()) still erases these rows.
     railRows = rows;
     railTop = top;
-    const inputRow = rows - 2;
-    const bottomRuleRow = rows - 1;
+    const borderRow = top + 1;
+    const inputRow = top + 2;
+    const bottomRuleRow = rows;
     const width = Math.max(20, Number(output.columns) || 80);
-    // Leave the final cell empty: writing into a terminal's last column can
-    // trigger an implicit wrap and shift the cursor into the transcript.
-    const rule = color.muted("─".repeat(Math.max(1, width - 1)));
-    output.write(`\u001b[${top};1H\u001b[2K${rule}`);
+    // Keep every draw one column short of the terminal edge so Windows
+    // Terminal never autowraps a chrome character into the chat viewport.
+    const frameWidth = Math.max(18, width - 1);
+    const frame = "═".repeat(Math.max(1, frameWidth - 2));
+    output.write(`\u001b[${top};1H\u001b[48;2;47;62;84m\u001b[38;2;190;202;224m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
+    output.write(`\u001b[${borderRow};1H\u001b[2K${color.terminalWhite(`╔${frame}╗`)}`);
     if (includeInput) {
-      output.write(`\u001b[${inputRow};1H\u001b[48;2;54;49;45m\u001b[2K\u001b[0m`);
+      output.write(`\u001b[${inputRow};1H\u001b[2K${color.terminalWhite(`║${" ".repeat(Math.max(1, frameWidth - 2))}║`)}\u001b[0m`);
     }
-    output.write(`\u001b[${bottomRuleRow};1H\u001b[2K${rule}`);
-    output.write(`\u001b[${rows};1H\u001b[2K${fixedComposerFooterLine()}`);
+    output.write(`\u001b[${bottomRuleRow};1H\u001b[2K${color.terminalWhite(`╚${frame}╝`)}\u001b[0m`);
   }
 
   function showComposer() {
@@ -3127,7 +3127,7 @@ async function interactive(config, auth, configPath, existingState) {
     clearComposerFooter();
     if (fixedComposer) {
       const rows = terminalRows();
-      const inputRow = rows - 2;
+      const inputRow = transcriptBottom() + 3;
       // Save the transcript cursor, then draw a dedicated four-row rail. The
       // scroll region prevents long responses from ever pushing the controls.
       output.write("\u001b[s");
@@ -3143,7 +3143,7 @@ async function interactive(config, auth, configPath, existingState) {
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[${inputRow};1H`);
-      rl.setPrompt("\u001b[48;2;54;49;45m\u001b[38;2;250;249;245m  ❯ \u001b[0m");
+      rl.setPrompt("\u001b[38;2;245;245;245m║ \u001b[38;2;0;255;77m❯ \u001b[38;2;190;202;224m\u001b[0m ");
       rl.prompt();
       composerMounted = true;
       return;
