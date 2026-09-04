@@ -2318,7 +2318,17 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     }
     conversation.push(assistant);
     await persistLocalSession(state, conversation);
+    // runClientTool prints directly (printToolResult, approval prompts,
+    // ask_question) with no clear/mount of its own around most of that --
+    // unlike onToolCall/onToolResult below, which always clear the box
+    // before printing and remount it after. Without this, the box's own
+    // row-count bookkeeping went stale the moment a local tool (Bash, Read,
+    // etc.) printed anything, so the NEXT real clear erased the wrong
+    // number of rows -- this is what made the rule/status line vanish
+    // specifically while a tool was running.
+    state.clearComposer?.();
     const resultText = await runClientTool(state, call);
+    state.mountComposer?.();
     emptyContinuationRetries = 0;
     outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
     conversation.push(userMessage(`<tool_result name="${call.name}">\n${resultText}\n</tool_result>`));
