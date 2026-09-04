@@ -1017,6 +1017,29 @@ async function animateText(text, paint = color.muted) {
   output.write("\n");
 }
 
+// Without a scroll region (dropped for good -- see the fixedComposer note in
+// interactive(), since it was never reliable on the user's actual terminal),
+// the composer has no way to stay pinned to the bottom of the screen except
+// by actually reaching it: pad with ordinary blank lines, computed from a
+// real count of what was just printed, until the box lands on the terminal's
+// last rows. This counts every newline written during fn (sync or async)
+// without needing any absolute cursor addressing.
+async function countStdoutLines(fn) {
+  let lines = 0;
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk, ...rest) => {
+    const str = typeof chunk === "string" ? chunk : chunk.toString();
+    lines += (str.match(/\n/g) || []).length;
+    return original(chunk, ...rest);
+  };
+  try {
+    await fn();
+  } finally {
+    process.stdout.write = original;
+  }
+  return lines;
+}
+
 async function printBanner(config, user = null, { resumed = false } = {}) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
   const conversationLabel = resumed ? "Resumed conversation" : "New conversation";
@@ -2636,7 +2659,9 @@ async function interactive(config, auth, configPath, existingState) {
   state.maxTurns ||= state.config.maxTurns || 25;
   state.maxBudget ??= state.config.maxBudget;
   state.spentCompute ||= 0;
-  await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
+  let startupPrintedLines = await countStdoutLines(async () => {
+    await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
+  });
   const rl = readline.createInterface({
     input,
     output,
@@ -3132,22 +3157,22 @@ async function interactive(config, auth, configPath, existingState) {
 
   rl.on("line", onLine);
   rl.once("close", onClose);
-  if (fixedComposer) {
-    // On Windows Terminal/ConPTY, output.rows/output.columns can still hold
-    // their pre-attach default at the instant the process starts -- the real
-    // size arrives a tick later. Drawing the rail before that lands mispositions
-    // it (looks broken until something like the user's first keystroke forces
-    // a redraw with the now-correct size). Yield once so the real size is in
-    // by the time we compute the scroll region and rail position.
-    await new Promise((resolve) => setImmediate(resolve));
-    // DECSTBM resets the cursor to the top margin in Windows Terminal. Save
-    // and restore it so the welcome copy cannot overwrite the banner.
-    output.write(`\u001b[s\u001b[1;${transcriptBottom()}r\u001b[u`);
-  }
-  if (!state.messages.length) {
-    printNewConversationIntro();
-  } else {
-    printConversationHistory(state);
+  startupPrintedLines += await countStdoutLines(() => {
+    if (!state.messages.length) {
+      printNewConversationIntro();
+    } else {
+      printConversationHistory(state);
+    }
+  });
+  if (!fixedComposer && output.isTTY) {
+    // Pad down to the bottom with plain blank lines -- no absolute cursor
+    // addressing, so it renders the same in conhost as anywhere else --
+    // using an ACTUAL count of what printBanner/printNewConversationIntro
+    // (or printConversationHistory, on resume) just printed, not a guessed
+    // constant that would drift the moment either of those changes.
+    const boxRows = 3; // rule + status line + input row
+    const pad = Math.max(0, terminalRows() - startupPrintedLines - boxRows);
+    for (let index = 0; index < pad; index += 1) console.log();
   }
   showComposer();
   try {
