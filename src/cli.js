@@ -3068,6 +3068,13 @@ async function interactive(config, auth, configPath, existingState) {
   rl.on("line", onLine);
   rl.once("close", onClose);
   if (fixedComposer) {
+    // On Windows Terminal/ConPTY, output.rows/output.columns can still hold
+    // their pre-attach default at the instant the process starts -- the real
+    // size arrives a tick later. Drawing the rail before that lands mispositions
+    // it (looks broken until something like the user's first keystroke forces
+    // a redraw with the now-correct size). Yield once so the real size is in
+    // by the time we compute the scroll region and rail position.
+    await new Promise((resolve) => setImmediate(resolve));
     // DECSTBM resets the cursor to the top margin in Windows Terminal. Save
     // and restore it so the welcome copy cannot overwrite the banner.
     output.write(`\u001b[s\u001b[1;${transcriptBottom()}r\u001b[u`);
