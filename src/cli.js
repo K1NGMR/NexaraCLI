@@ -2071,11 +2071,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     const activity = createActivityLine({
       quiet,
       streamJson: machine,
-      // Previously suppressed the inline spinner whenever interactive,
-      // assuming the anchored rail showed activity separately. That rail is
-      // no longer used (see the fixedComposer note in interactive()), so the
-      // inline spinner is the only activity indicator now.
-      stableComposer: false,
+      // The anchored rail shows activity in its own footer, so the inline
+      // spinner stays quiet in interactive mode to avoid a second animation.
+      stableComposer: Boolean(state.interactive),
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
     });
     state.thinkingText = "";
@@ -2228,7 +2226,6 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     if (!quiet && assistant.sources?.length) {
       console.log(`  ${color.muted("Sources")} ${assistant.sources.map((source) => color.cyan(typeof source === "string" ? source : source.url || source.title || "source")).join(color.muted(" · "))}`);
     }
-    if (!quiet && assistant.text?.trim()) printTurnComplete(turnStartedAt);
     const call = assistant.nativeCall;
     // Some provider streams close with an empty assistant payload. Do not
     // silently return the user to the prompt: retry the same continuation a
@@ -2246,6 +2243,12 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       composerNotice(state, "The model returned no response after 3 attempts. Please try again or switch models with /model.", "red");
     }
     if (!call || !CLI_LOCAL_TOOL_NAMES.has(call.name) && call.name !== "ask_question") {
+      // Printed only here, where the agent loop actually ends, rather than
+      // after every intermediate turn -- a turn that reads a file and keeps
+      // going still has more tool calls queued, so marking it "Completed"
+      // made an in-progress multi-step task look finished after just the
+      // first step.
+      if (!quiet && assistant.text?.trim()) printTurnComplete(turnStartedAt);
       conversation.push(assistant);
       await persistLocalSession(state, conversation);
       break;
@@ -2655,16 +2658,7 @@ async function interactive(config, auth, configPath, existingState) {
   // position it was actually drawn.
   let railTop = null;
   let railRows = null;
-  // The anchored rail (DECSTBM scroll region + absolute cursor addressing +
-  // a single shared save/restore slot) turned out to be unreliable on
-  // Windows Terminal: it duplicated on resize, lost the assistant's response
-  // by restoring the cursor to the wrong row, made the whole rail vanish
-  // after a burst of tool-call events, and made the input caret visibly jump
-  // up and down. Always use the simpler relative-footer layout below instead
-  // (print the status line, remember how many rows it took, move the cursor
-  // up that many rows to erase it before the next print) -- it doesn't
-  // depend on scroll regions or any single shared cursor slot.
-  const fixedComposer = false;
+  const fixedComposer = Boolean(input.isTTY && output.isTTY);
   const terminalRows = () => Math.max(8, Number(output.rows) || 24);
   // Four rows belong to the control rail: top rule, input, bottom rule, footer.
   // Everything above that boundary is the transcript and uses the terminal's
