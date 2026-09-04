@@ -109,7 +109,9 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       // Use the DEC save/restore pair so the transcript's CSI save slot is
       // never clobbered by editor redraws.
       output.write(`\r\u001b[2K${content}\u001b7\u001b[${Math.max(1, columns - 1)}G║\u001b8`);
-      if (index < visibleRows - 1) output.write("\n");
+      // Clear through the full previous render span so stale wrapped rows
+      // remain below the visible input instead of erasing it.
+      if (index < rowsToClear - 1) output.write("\n");
     }
     const moveUp = rowsToClear - 1 - visibleCursorRow;
     if (moveUp) output.write(`\u001b[${moveUp}A`);

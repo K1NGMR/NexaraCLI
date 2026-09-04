@@ -463,6 +463,7 @@ const color = {
   red: rgb(198, 69, 69),
   dim: (text) => ansi("2", text),
   italicMuted: (text) => ansi("3;38;2;160;157;150", text),
+  italicCream: (text) => ansi("3;38;2;250;249;245", text),
   green: rgb(93, 184, 114),
   yellow: rgb(212, 160, 23),
   // Compatibility aliases retained while commands transition to the palette.
@@ -491,6 +492,9 @@ const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
 const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
 const COMPOSER_INPUT_ROWS = 3;
+// Small "copy" affordance shown beside a committed message and in the turn
+// footer. Kept to a single BMP glyph so it renders in Windows Terminal.
+const COPY_GLYPH = "⧉";
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
@@ -806,13 +810,9 @@ function terminalWidth() {
 
 function clearTerminalForSession() {
   if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_CLEAR === "1") return;
-  // Clear the visible viewport and scrollback so every Nexara session starts
-  // as a clean workspace, while leaving the user's shell available on exit.
+  // Clear only the visible viewport; preserve the user's terminal scrollback.
   // Also reset mouse tracking left behind by an older/crashed CLI process.
-  // console.clear covers Windows hosts that ignore scrollback erasure, while
-  // the explicit VT sequence resets the viewport and terminal modes.
-  console.clear();
-  output.write("\u001b[r\u001b[0m\u001b[?1006l\u001b[?1000l\u001b[3J\u001b[2J\u001b[H");
+  output.write("\u001b[r\u001b[0m\u001b[?1006l\u001b[?1000l\u001b[2J\u001b[H");
 }
 
 function shorten(text, width) {
@@ -1329,13 +1329,28 @@ function userTurnLine(text) {
   return `${color.coral("›")} ${color.cream(text)}`;
 }
 
-function printUserTurn(text, files = []) {
-  const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function userTurnRows(text, files = []) {
+  // timestamp row + wrapped body rows + optional attachment row + the single
+  // blank separator printed below. Kept in one place so prepareTranscript()
+  // reserves exactly what printUserTurn() writes -- over-reserving is what
+  // produced the empty gap between a submitted message and its response.
+  return 1 + wrapChatText(text).length + (files.length ? 1 : 0) + 1;
+}
+
+function printUserTurn(text, files = [], timestamp = null) {
+  const stamp = timestamp
+    ? new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   console.log(`  ${color.dim(`[${stamp}]`)}`);
-  for (const line of wrapChatText(text)) console.log(`  ${color.neon("▌")} ${color.cream(line)}`);
+  const lines = wrapChatText(text);
+  lines.forEach((line, index) => {
+    const trailer = index === lines.length - 1 ? ` ${color.dim(COPY_GLYPH)}` : "";
+    console.log(`  ${color.neon("▌")} ${color.italicCream(line)}${trailer}`);
+  });
   if (files.length) {
     console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
   }
+  console.log();
 }
 
 function printAssistantHeader(state, mode) {
@@ -1356,7 +1371,7 @@ function printConversationHistory(state) {
       const files = (message.parts || [])
         .filter((part) => part?.type === "file")
         .map((part) => ({ filename: part.filename || "attachment" }));
-      if (text) printUserTurn(text, files);
+      if (text) printUserTurn(text, files, message.created_at || message.createdAt || null);
       continue;
     }
     if (role !== "assistant") continue;
@@ -1366,6 +1381,15 @@ function printConversationHistory(state) {
     }
     if (!text) continue;
     printAssistantHeader(state);
+    const reasoning = (message.parts || [])
+      .filter((part) => part?.type === "reasoning" || part?.type === "thinking")
+      .map((part) => part.text || part.content || "")
+      .join("\n")
+      .trim();
+    if (reasoning) {
+      console.log(`  ${color.cream("▾ Thinking")}`);
+      process.stdout.write(`${reasoning.split(/\r?\n/).map((line) => `    ${color.italicMuted(line)}`).join("\n")}\n\n`);
+    }
     process.stdout.write(`${indentAssistantText(wrapRenderedTerminalMarkdown(renderTerminalMarkdown(text, { colorize: false })))}\n`);
   }
   if (messages.some((message) => String(message?.role || "").toLowerCase() === "user" || String(message?.role || "").toLowerCase() === "assistant")) {
@@ -1375,7 +1399,12 @@ function printConversationHistory(state) {
 
 function printTurnComplete(startedAt) {
   const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-  console.log(`  ${color.muted("—")} ${color.dim(`Completed in ${elapsedSeconds}s`)}`);
+  // A quiet right-aligned meta rail (copy · duration · scroll) instead of a
+  // left-aligned "Completed in Ns" sentence, so the answer itself stays the
+  // only thing reading as content in the transcript.
+  const meta = `${COPY_GLYPH} • ${elapsedSeconds}s • ▵▿`;
+  const pad = Math.max(1, terminalWidth() - meta.length);
+  console.log(`${" ".repeat(pad)}${color.dim(meta)}`);
 }
 
 function printSessionFooter(state) {
@@ -2213,7 +2242,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     // submitted prompt visible even when auth, thread creation, or the model
     // takes a moment, and prevents the composer redraw from hiding it.
     state.clearComposer?.();
-    const userRows = wrapChatText(trimmed).length + 4 + (files.length ? 1 : 0);
+    const userRows = userTurnRows(trimmed, files);
     state.prepareTranscript?.(userRows);
     printUserTurn(trimmed, files);
     printAssistantHeader(state, mode);
@@ -2303,12 +2332,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
           setComposerActivity(state, "writing");
         }
         if (state.interactive) {
-          if (!responseStreamRendered) {
-            responseStreamRendered = true;
-            state.clearComposer?.();
-            state.prepareTranscript?.(1);
-          }
-          process.stdout.write(delta);
+          // Keep streamed deltas in memory until the response is complete.
+          // Printing raw chunks bypasses markdown formatting and corrupts the
+          // fixed composer/transcript cursor when chunks soft-wrap.
         }
       }
     };
@@ -2394,14 +2420,13 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     }
     activity.clear();
     state.clearComposer?.();
-    if (responseStreamRendered) process.stdout.write("\n");
     lastAssistant = assistant;
     const responseText = assistant.text || streamedText;
     if (responseText && !assistant.text) {
       assistant.text = responseText;
       assistant.parts = [{ type: "text", text: responseText }];
     }
-    if (responseText.trim() && state.outputFormat !== "json" && !machine && !responseStreamRendered) {
+    if ((responseText.trim() || String(state.thinkingText || "").trim()) && state.outputFormat !== "json" && !machine) {
       const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: false }));
       const reasoning = String(state.thinkingText || "").trim();
       if (reasoning && !thinkingRendered) {
@@ -3439,7 +3464,7 @@ async function interactive(config, auth, configPath, existingState) {
     state.pendingImages = [];
     if (activeRun) {
       pendingMessages.push({ line, files });
-      state.prepareTranscript?.(wrapChatText(line).length + 4 + (files.length ? 1 : 0));
+      state.prepareTranscript?.(userTurnRows(line, files) + 1);
       printUserTurn(line, files);
       console.log(`  ${color.amber("↳")} ${color.cream("Queued")} ${color.muted(`message ${pendingMessages.length} · will run after the current turn`)}`);
       showComposer();
