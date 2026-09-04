@@ -488,7 +488,7 @@ function activityText(status) {
   })[status] || String(status || "Working…");
 }
 
-function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0 } = {}) {
+function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, stableComposer = false } = {}) {
   const startedAt = Date.now();
   let status = "waiting";
   let frame = 0;
@@ -498,7 +498,12 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     if (streamJson) process.stdout.write(`${JSON.stringify(event)}\n`);
   };
   const render = () => {
-    if (quiet || streamJson || !output.isTTY) return;
+    // readline owns the active composer row. Moving the cursor above it for a
+    // spinner makes readline's internal cursor position stale, so typed text
+    // can appear in the middle of the transcript and queued lines get lost.
+    // Interactive sessions show the live state in the fixed footer instead;
+    // non-interactive TTY output keeps the standalone activity line behavior.
+    if (quiet || streamJson || !output.isTTY || stableComposer) return;
     visible = true;
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
     const glyph = ACTIVITY_FRAMES[frame % ACTIVITY_FRAMES.length];
@@ -525,7 +530,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     clear() {
       if (timer) clearInterval(timer);
       timer = null;
-      if (visible && output.isTTY && !streamJson) {
+      if (visible && output.isTTY && !streamJson && !stableComposer) {
         const offset = Math.max(0, Number(getCursorOffset()) || 0);
         if (offset) output.write(`\u001b[${offset}A\r\u001b[2K\u001b[${offset}B`);
         else output.write("\r\u001b[2K");
@@ -628,7 +633,9 @@ function visibleLength(text) {
 
 function terminalWidth() {
   const columns = Number(output.columns) || 80;
-  return Math.max(40, columns);
+  // Leave a two-column safety margin. Terminals wrap a line written exactly
+  // to the last column, which turns in-place picker redraws into new rows.
+  return Math.max(20, columns - 2);
 }
 
 function clearTerminalForSession() {
@@ -1175,7 +1182,10 @@ function printSessionFooter(state) {
     dockLine(state.busy ? `${color.coral("✦")} ${color.muted("Working — you can keep typing; messages will queue")}` : `${color.muted("↵")} ${color.muted("Send · / for commands · Esc Esc to exit")}`),
     bottom,
   ];
-  process.stdout.write(`\n${lines.join("\n")}\n`);
+  // The footer is mounted immediately after the assistant header. A leading
+  // newline here becomes an untracked spacer row; when the footer is erased
+  // after a response, that row remains and makes the answer look detached.
+  process.stdout.write(`${lines.join("\n")}\n`);
   return lines.length;
 }
 
@@ -1986,6 +1996,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     const activity = createActivityLine({
       quiet,
       streamJson: machine,
+      stableComposer: Boolean(state.interactive),
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
     });
     state.thinkingText = "";
