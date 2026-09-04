@@ -1249,27 +1249,30 @@ function printTurnComplete(startedAt) {
 
 function printSessionFooter(state) {
   const activity = composerActivityLine(state);
-  const width = terminalWidth();
-  const rule = color.muted("─".repeat(Math.max(1, width)));
-  let statusLine;
+  let statusText;
   if (activity) {
-    statusLine = `  ${activity}`;
+    statusText = activity;
   } else {
     const used = lastRealContext(state) ?? contextOf(state.messages || []);
     const windowSize = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
     const percent = Math.min(100, Math.round((used / windowSize) * 100));
     const lead = state.busy ? color.coral("●") : color.teal("●");
     const label = state.busy ? "Working" : "Ready";
-    statusLine = `  ${lead} ${color.muted(label)} ${color.dim("·")} ${color.muted(`${percent}% context`)} ${color.dim("·")} ${color.muted(modelLabel(state.config.selectedModel))}`;
+    statusText = `${lead} ${color.muted(label)} ${color.dim("·")} ${color.muted(`${percent}% context`)} ${color.dim("·")} ${color.muted(modelLabel(state.config.selectedModel))}`;
   }
-  // Frame the input with a rule above and a status line below it so the
-  // composer reads as a box (matching Claude CLI/Codex CLI) instead of a
-  // bare single-line prompt, without needing a scroll region or absolute
-  // cursor addressing -- everything here is a plain line print, erased
-  // later with an ordinary relative cursor-up-and-clear (see
-  // clearComposerFooter), so it renders the same in any terminal.
-  process.stdout.write(`${rule}\n${statusLine}\n`);
-  return 2;
+  // A bare rule + status line looked inconsistent next to the actual
+  // bordered panel used for sign-in/prompts (printPanel) -- frame the
+  // status the same way (╭─╮ / │ … │ / ╰─╯) so the composer reads as a
+  // real box too. Still nothing but plain line prints, erased later with
+  // an ordinary relative cursor-up-and-clear (see clearComposerFooter), so
+  // it renders the same in any terminal -- no scroll region or absolute
+  // cursor addressing involved.
+  const width = terminalWidth();
+  const innerWidth = width - 6;
+  process.stdout.write(`  ${color.muted("╭")}${color.muted("─".repeat(width - 4))}${color.muted("╮")}\n`);
+  process.stdout.write(`${panelLine(statusText, innerWidth)}\n`);
+  process.stdout.write(`  ${color.muted("╰")}${color.muted("─".repeat(width - 4))}${color.muted("╯")}\n`);
+  return 3;
 }
 
 function renderTerminalInlineMarkdown(value, colorize = true) {
@@ -2670,6 +2673,36 @@ async function interactive(config, auth, configPath, existingState) {
   state.maxTurns ||= state.config.maxTurns || 100;
   state.maxBudget ??= state.config.maxBudget;
   state.spentCompute ||= 0;
+  // Wanting the box pinned to the literal bottom row AND new content to
+  // keep appending right where the last real content left off are only
+  // both true at once if the gap between them is recomputed and
+  // reinserted on every redraw, not left over from whenever it was last
+  // sized. realContentRows tracks how many physical rows of REAL content
+  // (banner, conversation, tool output, notices -- anything that isn't the
+  // box's own chrome or the gap itself) have been printed; clearComposer
+  // already erases the gap along with the box every time (composerFooterLines
+  // covers both -- see renderComposerFooter below), so re-deriving the gap
+  // from this count on every mount keeps the box at the bottom without
+  // content ever printing after stale padding. Installed before the banner
+  // prints so its rows count too.
+  let realContentRows = 0;
+  let paintingBox = false;
+  const outputWrite = output.write.bind(output);
+  output.write = (chunk, ...rest) => {
+    if (!paintingBox && chunk) {
+      const str = typeof chunk === "string" ? chunk : chunk.toString();
+      const segments = str.split("\n");
+      const columns = Math.max(1, Number(output.columns) || 80);
+      // Only fully-terminated segments (everything before a \n) count as
+      // real, completed rows -- an in-place redraw (the prompt, a spinner
+      // tick, backspacing) never contains a literal newline, so it is
+      // naturally excluded without needing to special-case it.
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        realContentRows += Math.max(1, Math.ceil((visibleLength(segments[index]) || 0) / columns));
+      }
+    }
+    return outputWrite(chunk, ...rest);
+  };
   await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
   const rl = readline.createInterface({
     input,
@@ -2801,7 +2834,18 @@ async function interactive(config, auth, configPath, existingState) {
 
   function renderComposerFooter() {
     if (fixedComposer) return;
-    composerFooterLines = printSessionFooter(state);
+    // Re-derive the gap needed to reach the bottom from actual real-content
+    // rows printed so far, every time -- once that count exceeds the
+    // screen height the pad is naturally just 0 forever after (the terminal
+    // is already full and its own scrolling keeps the tail, i.e. the box,
+    // at the bottom on its own).
+    const boxRows = 4; // top border + status line + bottom border + input row
+    const pad = Math.max(0, terminalRows() - boxRows - Math.min(realContentRows, terminalRows()));
+    paintingBox = true;
+    for (let index = 0; index < pad; index += 1) console.log();
+    const footerLines = printSessionFooter(state);
+    paintingBox = false;
+    composerFooterLines = pad + footerLines;
     state.composerFooterLines = composerFooterLines;
   }
 
