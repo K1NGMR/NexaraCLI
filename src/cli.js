@@ -5,7 +5,7 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 import { createAuth } from "./auth.js";
-import { createThread, listThreads, loadThread, sendChat, transcribeAudio, userMessage } from "./api.js";
+import { createThread, listThreads, loadThread, messageText, sendChat, transcribeAudio, userMessage } from "./api.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { startMicRecording } from "./mic.js";
 import { printQr } from "./qr.js";
@@ -503,6 +503,7 @@ function setComposerActivity(state, status) {
   if (!state.interactive) return;
   state.composerActivity = status || null;
   state.composerActivityFrame = 0;
+  state.refreshComposer?.();
 }
 
 function startComposerActivityAnimation(state) {
@@ -1008,12 +1009,16 @@ async function animateText(text, paint = color.muted) {
   output.write("\n");
 }
 
-async function printBanner(config, user = null) {
+async function printBanner(config, user = null, { resumed = false } = {}) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
+  const conversationLabel = resumed ? "Resumed conversation" : "New conversation";
   console.log();
-  console.log(`  ${color.coral("▟█▙")}  ${color.cream("Nexara CLI")} ${color.muted(`v${CURRENT_VERSION}`)}`);
-  console.log(`  ${color.coral("▜█▛")}  ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort`)}`);
-  console.log(`   ${color.coral("▀")}   ${color.muted(displayPath())}`);
+  console.log(`  ${color.coral("✦")} ${color.cream("Nexara CLI")} ${color.muted(`v${CURRENT_VERSION}`)}`);
+  console.log(`  ${color.muted("Model")} ${color.cream(modelLabel(config.selectedModel))} ${color.muted(`· ${effort} effort · ${conversationLabel}`)}`);
+  console.log(`  ${color.muted("Workspace")} ${color.cream(displayPath())}${user?.email ? ` ${color.muted("·")} ${color.muted(user.email)}` : ""}`);
+  console.log(`  ${color.teal("●")} ${color.cream("Ready")} ${color.muted("· 0% context · / for commands")}`);
+  const ruleWidth = Math.max(24, Math.min(128, terminalWidth() - 4));
+  console.log(`  ${color.muted("─".repeat(ruleWidth))}`);
   console.log();
 }
 
@@ -1182,6 +1187,36 @@ function printAssistantHeader(state, mode) {
   process.stdout.write(`\n  ${color.coral("NEXARA")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
 }
 
+function printConversationHistory(state) {
+  const messages = Array.isArray(state.messages) ? state.messages : [];
+  for (const message of messages) {
+    const role = String(message?.role || "").toLowerCase();
+    const text = messageText(message).trim();
+    // Tool results are implementation context, not chat bubbles. Rendering
+    // them on resume makes the transcript look like a log dump and pushes the
+    // actual conversation away from the top of the viewport.
+    if (role === "user" && /^<tool_result\b/i.test(text)) continue;
+    if (role === "user") {
+      const files = (message.parts || [])
+        .filter((part) => part?.type === "file")
+        .map((part) => ({ filename: part.filename || "attachment" }));
+      if (text) printUserTurn(text, files);
+      continue;
+    }
+    if (role !== "assistant") continue;
+    if (!text && message.nativeCall) {
+      printToolCall(message.nativeCall);
+      continue;
+    }
+    if (!text) continue;
+    printAssistantHeader(state);
+    process.stdout.write(`${indentAssistantText(wrapRenderedTerminalMarkdown(renderTerminalMarkdown(text, { colorize: true })))}\n`);
+  }
+  if (messages.some((message) => String(message?.role || "").toLowerCase() === "user" || String(message?.role || "").toLowerCase() === "assistant")) {
+    console.log(color.dim("  ── live transcript ──"));
+  }
+}
+
 function printTurnComplete(startedAt) {
   const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
   console.log(`  ${color.muted("—")} ${color.dim(`Completed in ${elapsedSeconds}s`)}`);
@@ -1291,6 +1326,10 @@ function wrapRenderedTerminalMarkdown(text) {
     // which would break the transcript's visual rhythm and picker geometry.
     return wrapChatText(line.replace(ANSI_RE, ""), width);
   }).join("\n");
+}
+
+function indentAssistantText(text) {
+  return String(text || "").split("\n").map((line) => line ? `  ${line}` : "").join("\n");
 }
 
 function modelLabel(id) {
@@ -1995,6 +2034,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     state.clearComposer?.();
     printUserTurn(trimmed, files);
     printAssistantHeader(state, mode);
+    // Keep the control rail visible while the model works. The prompt remains
+    // usable, so a second line can be queued without disturbing the stream.
+    state.mountComposer?.();
   }
   const conversation = [...state.messages, message];
   await persistLocalSession(state, conversation);
@@ -2150,7 +2192,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       assistant.parts = [{ type: "text", text: responseText }];
     }
     if (responseText.trim() && state.outputFormat !== "json" && !machine) {
-      process.stdout.write(`${wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: !state.quiet }))}\n`);
+      process.stdout.write(`${indentAssistantText(wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: !state.quiet })))}\n`);
     }
     if (assistant.usage) {
       state.lastUsage = assistant.usage;
@@ -2531,7 +2573,7 @@ async function interactive(config, auth, configPath, existingState) {
   state.maxTurns ||= state.config.maxTurns || 25;
   state.maxBudget ??= state.config.maxBudget;
   state.spentCompute ||= 0;
-  await printBanner(config, await auth.user());
+  await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
   const rl = readline.createInterface({
     input,
     output,
@@ -2570,8 +2612,12 @@ async function interactive(config, auth, configPath, existingState) {
   let composerFooterLines = 0;
   const fixedComposer = Boolean(input.isTTY && output.isTTY);
   const terminalRows = () => Math.max(8, Number(output.rows) || 24);
-  const transcriptBottom = () => Math.max(3, terminalRows() - 3);
+  // Four rows belong to the control rail: rule, live status, input, footer.
+  // Everything above that boundary is the transcript and uses the terminal's
+  // normal top-to-bottom scroll direction.
+  const transcriptBottom = () => Math.max(3, terminalRows() - 4);
   let transcriptCursorSaved = false;
+  let composerMounted = false;
   let slashSuggestionLines = 0;
   let slashSuggestionIndex = -1;
   let slashSuggestionInput = null;
@@ -2585,12 +2631,21 @@ async function interactive(config, auth, configPath, existingState) {
   function clearComposerFooter() {
     if (fixedComposer) {
       const rows = terminalRows();
-      output.write(`\u001b[${transcriptBottom() + 1};1H\u001b[2K\u001b[${rows - 1};1H\u001b[2K\u001b[${rows};1H\u001b[2K\u001b[0m`);
+      const top = transcriptBottom() + 1;
+      // This function is intentionally safe to call more than once per turn:
+      // onLine clears the rail, and runPrompt may clear it again while the
+      // thread is being prepared. Preserve the current transcript position
+      // when no composer cursor has been saved for restoration.
+      const preserveCurrentCursor = !transcriptCursorSaved;
+      if (preserveCurrentCursor) output.write("\u001b[s");
+      // Erase only the reserved rail. Never clear the transcript viewport.
+      output.write(`\u001b[${top};1H\u001b[2K\u001b[${top + 1};1H\u001b[2K\u001b[${rows - 1};1H\u001b[2K\u001b[${rows};1H\u001b[2K\u001b[0m`);
       // `showComposer` saves the transcript position before moving to the
       // fixed controls. Restore it so the next user/assistant turn appends
       // directly after the header instead of jumping to the lower boundary.
-      if (transcriptCursorSaved) output.write("\u001b[u");
+      if (transcriptCursorSaved || preserveCurrentCursor) output.write("\u001b[u");
       transcriptCursorSaved = false;
+      composerMounted = false;
       composerFooterLines = 0;
       state.composerFooterLines = 0;
       return;
@@ -2625,7 +2680,7 @@ async function interactive(config, auth, configPath, existingState) {
   // the bottom while status updates are drawn above it.
   state.composerFooterLines = 0;
   state.clearComposer = clearComposerFooter;
-  state.mountComposer = () => { if (!state.busy) showComposer(); };
+  state.mountComposer = () => showComposer();
 
   function clearSlashSuggestions(afterSubmit = false) {
     cancelSlashSuggestionTimer();
@@ -2798,21 +2853,57 @@ async function interactive(config, auth, configPath, existingState) {
   let resolveInteractive;
   const interactiveFinished = new Promise((resolve) => { resolveInteractive = resolve; });
 
+  function fixedComposerStatus() {
+    const activity = composerActivityLine(state);
+    if (activity) return activity;
+    const used = lastRealContext(state) ?? contextOf(state.messages || []);
+    const windowSize = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;
+    const percent = Math.min(100, Math.round((used / windowSize) * 100));
+    const lead = state.busy ? color.coral("●") : color.teal("●");
+    const label = state.busy ? "Working" : "Ready";
+    return `${lead} ${color.muted(label)} ${color.dim("·")} ${color.muted(`${percent}% context`)}`;
+  }
+
+  function fixedComposerFooter() {
+    const model = color.muted(modelLabel(state.config.selectedModel));
+    const mode = state.busy ? color.coral("processing") : color.muted("idle");
+    const queue = state.busy ? color.muted("· Ctrl+C cancel · type to queue") : color.muted("· /help for commands");
+    return `  ${model} ${mode} ${queue}`;
+  }
+
+  function drawFixedComposerRail({ includeInput = false } = {}) {
+    const rows = terminalRows();
+    const top = transcriptBottom() + 1;
+    const statusRow = top + 1;
+    const inputRow = rows - 1;
+    const width = Math.max(20, Number(output.columns) || 80);
+    // Leave the final cell empty: writing into a terminal's last column can
+    // trigger an implicit wrap and shift the cursor into the transcript.
+    const rule = color.muted("─".repeat(Math.max(1, width - 1)));
+    output.write(`\u001b[${top};1H\u001b[2K${rule}`);
+    output.write(`\u001b[${statusRow};1H\u001b[2K  ${fixedComposerStatus()}`);
+    if (includeInput) {
+      output.write(`\u001b[${inputRow};1H\u001b[48;2;54;49;45m\u001b[2K\u001b[0m`);
+    }
+    output.write(`\u001b[${rows};1H\u001b[2K${fixedComposerFooter()}`);
+  }
+
   function showComposer() {
     if (closing || rl.closed) return;
     clearComposerFooter();
     if (fixedComposer) {
       const rows = terminalRows();
-      const statusRow = transcriptBottom() + 1;
       const inputRow = rows - 1;
-      // Reserve the last three rows. The terminal scrolls only the transcript
-      // above them, which makes the command box genuinely fixed at the bottom.
+      // Save the transcript cursor, then draw a dedicated four-row rail. The
+      // scroll region prevents long responses from ever pushing the controls.
       output.write("\u001b[s");
       transcriptCursorSaved = true;
       output.write(`\u001b[1;${transcriptBottom()}r`);
-      output.write(`\u001b[${statusRow};1H\u001b[2K  ${color.muted("/ for commands · Esc Esc exits")}\u001b[${inputRow};1H\u001b[48;2;54;49;45m\u001b[2K\u001b[0m\u001b[${rows};1H\u001b[2K  ${color.muted("Nexara · ready")}\u001b[${inputRow};1H`);
+      drawFixedComposerRail({ includeInput: true });
+      output.write(`\u001b[${inputRow};1H`);
       rl.setPrompt("\u001b[48;2;54;49;45m\u001b[38;2;250;249;245m  ❯ \u001b[0m");
       rl.prompt();
+      composerMounted = true;
       return;
     }
     renderComposerFooter();
@@ -2828,9 +2919,12 @@ async function interactive(config, auth, configPath, existingState) {
   // and any text the user is typing while still allowing an idle composer to
   // show the processing and thinking animation.
   function refreshComposer() {
-    // Transcript integrity takes priority over animation. The next composer
-    // mount shows the current activity frame without cursor repositioning.
-    return;
+    if (closing || rl.closed || !fixedComposer || !composerMounted) return;
+    // The current cursor belongs to readline. Save/restore it while updating
+    // only the status rail; the input line and transcript remain untouched.
+    output.write("\u001b[s");
+    drawFixedComposerRail();
+    output.write("\u001b[u");
   }
 
   state.refreshComposer = refreshComposer;
@@ -2901,7 +2995,19 @@ async function interactive(config, auth, configPath, existingState) {
 
   rl.on("line", onLine);
   rl.once("close", onClose);
-  if (fixedComposer) output.write(`\u001b[1;${transcriptBottom()}r`);
+  if (fixedComposer) {
+    // DECSTBM resets the cursor to the top margin in Windows Terminal. Save
+    // and restore it so the welcome copy cannot overwrite the banner.
+    output.write(`\u001b[s\u001b[1;${transcriptBottom()}r\u001b[u`);
+  }
+  if (!state.messages.length) {
+    console.log(`  ${color.coral("✦")} ${color.cream("New conversation")}`);
+    console.log(`  ${color.muted("Ask Nexara to inspect, build, or change this workspace.")}`);
+    console.log(`  ${color.dim("Type /help for commands · M for voice input")}`);
+    console.log();
+  } else {
+    printConversationHistory(state);
+  }
   showComposer();
   try {
     await interactiveFinished;
