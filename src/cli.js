@@ -1027,29 +1027,6 @@ async function animateText(text, paint = color.muted) {
   output.write("\n");
 }
 
-// Without a scroll region (dropped for good -- see the fixedComposer note in
-// interactive(), since it was never reliable on the user's actual terminal),
-// the composer has no way to stay pinned to the bottom of the screen except
-// by actually reaching it: pad with ordinary blank lines, computed from a
-// real count of what was just printed, until the box lands on the terminal's
-// last rows. This counts every newline written during fn (sync or async)
-// without needing any absolute cursor addressing.
-async function countStdoutLines(fn) {
-  let lines = 0;
-  const original = process.stdout.write.bind(process.stdout);
-  process.stdout.write = (chunk, ...rest) => {
-    const str = typeof chunk === "string" ? chunk : chunk.toString();
-    lines += (str.match(/\n/g) || []).length;
-    return original(chunk, ...rest);
-  };
-  try {
-    await fn();
-  } finally {
-    process.stdout.write = original;
-  }
-  return lines;
-}
-
 async function printBanner(config, user = null, { resumed = false } = {}) {
   const effort = REASONING_EFFORT_LABELS[config.selectedReasoningEffort] || config.selectedReasoningEffort;
   const conversationLabel = resumed ? "Resumed conversation" : "New conversation";
@@ -2213,7 +2190,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
           activity.clear();
           state.clearComposer?.();
           printToolCall(call, { streamJson: machine });
-          state.mountComposer?.();
+          (state.scheduleMountComposer || state.mountComposer)?.();
           outputToolEvent(state, { type: "tool-call", name: call.name, input: call.arguments, toolCallId: call.toolCallId });
         },
         onToolResult: (result) => {
@@ -2222,7 +2199,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
           if (!quiet && result.name !== "create_pdf" && result.name !== "create_image" && result.name !== "edit_image") {
             printToolResult(result.name, result.output);
           }
-          state.mountComposer?.();
+          (state.scheduleMountComposer || state.mountComposer)?.();
           outputToolEvent(state, { type: "tool-result", name: result.name, output: result.output });
         },
         onSource: (source) => outputToolEvent(state, { type: "source", source }),
@@ -2328,7 +2305,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     // specifically while a tool was running.
     state.clearComposer?.();
     const resultText = await runClientTool(state, call);
-    state.mountComposer?.();
+    (state.scheduleMountComposer || state.mountComposer)?.();
     emptyContinuationRetries = 0;
     outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
     conversation.push(userMessage(`<tool_result name="${call.name}">\n${resultText}\n</tool_result>`));
@@ -2693,9 +2670,7 @@ async function interactive(config, auth, configPath, existingState) {
   state.maxTurns ||= state.config.maxTurns || 100;
   state.maxBudget ??= state.config.maxBudget;
   state.spentCompute ||= 0;
-  let startupPrintedLines = await countStdoutLines(async () => {
-    await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
-  });
+  await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
   const rl = readline.createInterface({
     input,
     output,
@@ -2739,7 +2714,6 @@ async function interactive(config, auth, configPath, existingState) {
   // position it was actually drawn.
   let railTop = null;
   let railRows = null;
-  let lastKnownTerminalRows = null;
   // Confirmed with real data (process.stdout.rows/columns = 51/209, both
   // correct for a fullscreen window) that the missing bottom rule/footer was
   // never a row-count problem -- every row the anchored rail computes falls
@@ -2834,8 +2808,32 @@ async function interactive(config, auth, configPath, existingState) {
   // The streaming renderer uses these hooks to keep the composer anchored at
   // the bottom while status updates are drawn above it.
   state.composerFooterLines = 0;
-  state.clearComposer = clearComposerFooter;
+  // A turn with many rapid tool calls (deleting a dozen files, say) cleared
+  // and remounted the box once per call -- each remount reprints the box a
+  // couple of lines further down as the log above it grows, so in a fast
+  // burst the box visibly jumped down the screen over and over. Debouncing
+  // the mount coalesces a burst into a single remount once it actually
+  // settles, the same way the resize handler already avoids redrawing on
+  // every intermediate frame of a drag-resize. A pending debounced mount
+  // must never survive past the NEXT clear (which always precedes the next
+  // print), or it could fire after new content already printed and land in
+  // the wrong place -- so clearComposer cancels it too.
+  let mountComposerTimer = null;
+  state.clearComposer = () => {
+    if (mountComposerTimer) {
+      clearTimeout(mountComposerTimer);
+      mountComposerTimer = null;
+    }
+    clearComposerFooter();
+  };
   state.mountComposer = () => showComposer();
+  state.scheduleMountComposer = () => {
+    if (mountComposerTimer) clearTimeout(mountComposerTimer);
+    mountComposerTimer = setTimeout(() => {
+      mountComposerTimer = null;
+      showComposer();
+    }, 80);
+  };
 
   function clearSlashSuggestions(afterSubmit = false) {
     cancelSlashSuggestionTimer();
@@ -3096,21 +3094,19 @@ async function interactive(config, auth, configPath, existingState) {
   // and any text the user is typing while still allowing an idle composer to
   // show the processing and thinking animation.
   function refreshComposer() {
-    if (closing || rl.closed || !fixedComposer || !composerMounted) return;
-    // Do NOT use the \u001b[s / \u001b[u save-restore pair here: a terminal
-    // has only one such slot, and showComposer()/clearComposerFooter() also
-    // use it to remember the transcript insertion point across rail redraws.
-    // This function fires on every spinner tick (every 360ms) while a model
-    // turn is in flight -- saving/restoring here clobbered that slot with the
-    // input row position, so by the time the response arrived and the rail
-    // tried to restore the transcript position, it landed on the input row
-    // instead and the response text was written (and lost) there. Restore
-    // the input cursor by absolute position instead, leaving the shared
-    // save slot untouched.
-    const inputRow = terminalRows() - 2;
-    const cursor = typeof rl.getCursorPos === "function" ? rl.getCursorPos() : { cols: 2 };
-    drawFixedComposerRail();
-    output.write(`\u001b[${inputRow};${Math.max(0, Number(cursor.cols) || 0) + 1}H`);
+    if (closing || rl.closed || !composerMounted) return;
+    // This is the spinner tick (every 360ms while a model turn is in
+    // flight). It used to reposition the rail with absolute cursor
+    // addressing, which depended on the anchored-rail approach that is gone
+    // now (see the fixedComposer note above). A full clear-and-redraw
+    // through the exact same path every other box update already uses is
+    // safe here: showComposer() ends in rl.prompt(), which redraws
+    // readline's own current line (prompt + whatever the user has typed) --
+    // it is not clobbering the user's input, just repainting it, so the
+    // spinner glyph can animate without the cursor-desync bug the old
+    // standalone activity line had.
+    clearComposerFooter();
+    showComposer();
   }
 
   state.refreshComposer = refreshComposer;
@@ -3135,25 +3131,12 @@ async function interactive(config, auth, configPath, existingState) {
     resizeSettleTimer = setTimeout(() => {
       resizeSettleTimer = null;
       if (closing || rl.closed || !composerMounted) return;
-      // If the window GREW, already-printed content doesn't retroactively
-      // expand to fill the new height -- pad the exact growth with blank
-      // lines so the box moves down to the new bottom instead of staying
-      // wherever it was with new empty room appearing below it. Shrinking
-      // needs nothing extra: the terminal already keeps showing the tail of
-      // the scrollback (the box), so it stays at the new, shorter bottom on
-      // its own.
-      const rows = terminalRows();
-      const grew = lastKnownTerminalRows != null ? rows - lastKnownTerminalRows : 0;
-      lastKnownTerminalRows = rows;
+      // Redraw the box at its new width so a live resize does not leave a
+      // stale-width rule or status line behind -- this cannot use absolute
+      // addressing or a scroll region (see the fixedComposer note above), so
+      // it just re-runs the same relative clear-and-redraw every other
+      // update already uses.
       clearComposerFooter();
-      if (grew > 0) {
-        for (let index = 0; index < grew; index += 1) console.log();
-      }
-      // Redraw the box at its new width/position so a live resize does not
-      // leave a stale-width rule or status line sitting above wherever the
-      // box now belongs -- this cannot use absolute addressing or a scroll
-      // region (see the fixedComposer note above), so it just re-runs the
-      // same relative clear-and-redraw every other update already uses.
       showComposer();
     }, 150);
   };
@@ -3225,31 +3208,17 @@ async function interactive(config, auth, configPath, existingState) {
 
   rl.on("line", onLine);
   rl.once("close", onClose);
-  startupPrintedLines += await countStdoutLines(() => {
-    if (!state.messages.length) {
-      printNewConversationIntro();
-    } else {
-      printConversationHistory(state);
-    }
-  });
-  if (!fixedComposer && output.isTTY) {
-    // Pad down to the bottom with plain blank lines -- no absolute cursor
-    // addressing, so it renders the same in conhost as anywhere else --
-    // using an ACTUAL count of what printBanner/printNewConversationIntro
-    // (or printConversationHistory, on resume) just printed, not a guessed
-    // constant that would drift the moment either of those changes.
-    const boxRows = 3; // rule + status line + input row
-    const pad = Math.max(0, terminalRows() - startupPrintedLines - boxRows);
-    for (let index = 0; index < pad; index += 1) console.log();
+  if (!state.messages.length) {
+    printNewConversationIntro();
+  } else {
+    printConversationHistory(state);
   }
-  // The box is anchored to the bottom now, but only for THIS size. If the
-  // window later grows (e.g. windowed -> fullscreen), already-printed
-  // content doesn't retroactively expand to fill the new height -- the
-  // terminal just reveals more blank room below whatever was last printed,
-  // and the box stays wherever it was instead of moving down into it. The
-  // resize handler below uses this to pad exactly the growth, not a
-  // rescan of everything printed so far.
-  lastKnownTerminalRows = terminalRows();
+  // No padding: the box just prints right after whatever came before it, the
+  // same as any other line. It only ever sits away from the visible bottom
+  // when there isn't much on screen yet -- pre-filling that gap with blank
+  // lines pushed every message that followed down there too, so a fresh
+  // session started with a wall of dead space above the actual conversation
+  // instead of the conversation continuing naturally from the intro.
   showComposer();
   try {
     await interactiveFinished;
@@ -3258,7 +3227,7 @@ async function interactive(config, auth, configPath, existingState) {
     rl.removeListener("close", onClose);
     input.removeListener("keypress", onKeypress);
     input.removeListener("keypress", onSlashKeypress);
-    if (fixedComposer && typeof output.removeListener === "function") output.removeListener("resize", onResize);
+    if (typeof output.removeListener === "function") output.removeListener("resize", onResize);
     setMouseReporting(false);
     cancelSlashSuggestionTimer();
     clearSlashSuggestions(true);
