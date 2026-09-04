@@ -3108,15 +3108,30 @@ async function interactive(config, auth, configPath, existingState) {
   // Keep the transcript boundary and composer rail in sync when the terminal
   // is resized. Readline retains the current line, so remounting the rail is
   // enough to preserve typed text while moving the controls to the new bottom.
+  let resizeSettleTimer = null;
   const onResize = () => {
     if (closing || rl.closed || !composerMounted) return;
-    // Redraw the box at its new width/position so a live resize does not
-    // leave a stale-width rule or status line sitting above wherever the
-    // box now belongs -- this cannot use absolute addressing or a scroll
-    // region (see the fixedComposer note above), so it just re-runs the
-    // same relative clear-and-redraw every other update already uses.
-    clearComposerFooter();
-    showComposer();
+    // A fullscreen toggle (or any drag-resize) fires many 'resize' events in
+    // quick succession while the window animates through intermediate sizes,
+    // not just one at the final size. Redrawing on every single one raced
+    // against itself -- a clear-and-redraw for a transient in-between size
+    // could undercount how many rows its own content actually took (e.g. the
+    // rule line wrapping to two rows for one instant), leaving a stray
+    // fragment behind that the NEXT redraw's line-count tracking never knew
+    // to erase. Debounce so only the size the window actually settles on
+    // triggers a redraw.
+    if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
+    resizeSettleTimer = setTimeout(() => {
+      resizeSettleTimer = null;
+      if (closing || rl.closed || !composerMounted) return;
+      // Redraw the box at its new width/position so a live resize does not
+      // leave a stale-width rule or status line sitting above wherever the
+      // box now belongs -- this cannot use absolute addressing or a scroll
+      // region (see the fixedComposer note above), so it just re-runs the
+      // same relative clear-and-redraw every other update already uses.
+      clearComposerFooter();
+      showComposer();
+    }, 150);
   };
   if (typeof output.on === "function") output.on("resize", onResize);
 
