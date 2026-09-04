@@ -8,6 +8,7 @@ import { createAuth } from "./auth.js";
 import { createThread, listThreads, loadThread, messageText, sendChat, transcribeAudio, userMessage } from "./api.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { startMicRecording } from "./mic.js";
+import { createTerminalEditor } from "./terminal-editor.js";
 import { printQr } from "./qr.js";
 import { listLocalSessions, loadLocalSession, localSessionPath, saveLocalSession, SESSION_DIR } from "./sessions.js";
 import {
@@ -2838,17 +2839,16 @@ async function interactive(config, auth, configPath, existingState) {
     return outputWrite(chunk, ...rest);
   };
   await printBanner(config, await auth.user(), { resumed: state.messages.length > 0 });
-  const rl = readline.createInterface({
-    input,
-    output,
-    prompt: color.coral("  ❯ "),
-    // The CLI draws its own live, described completion strip. Returning no
-    // readline completions prevents Node's default multi-line dump from
-    // fighting that renderer when Tab is pressed.
-    completer: (line) => [[], line],
-    crlfDelay: Infinity,
-    terminal: Boolean(input.isTTY && output.isTTY),
-  });
+  const rl = input.isTTY && output.isTTY
+    ? createTerminalEditor({ input, output, width: terminalWidth })
+    : readline.createInterface({
+      input,
+      output,
+      prompt: color.coral("  ❯ "),
+      completer: (line) => [[], line],
+      crlfDelay: Infinity,
+      terminal: false,
+    });
   let questionActive = false;
   const askInComposer = async (message, options) => {
     questionActive = true;
