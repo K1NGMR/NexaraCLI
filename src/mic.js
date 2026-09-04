@@ -70,6 +70,7 @@ export async function startMicRecording({ onStatus = () => {}, onError = () => {
   let mode = null;
   let ffmpegInput = null;
   let processError = null;
+  let startupError = null;
 
   async function startPowershell() {
     await fs.writeFile(stopFile, "");
@@ -105,6 +106,29 @@ export async function startMicRecording({ onStatus = () => {}, onError = () => {
       processError = error instanceof Error ? error.message : String(error);
     });
     mode = "powershell";
+    const ready = await new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(false), 2_500);
+      child.stdout.on("data", (chunk) => {
+        if (/RECORDING/.test(chunk.toString())) finish(true);
+      });
+      child.once("exit", () => finish(false));
+      child.once("error", () => finish(false));
+    });
+    if (!ready) {
+      startupError = processError || "The Windows microphone recorder could not start.";
+      await waitExit(child, 500);
+      child = null;
+      mode = null;
+      throw new Error(startupError);
+    }
+    onStatus("recording");
   }
 
   async function startFfmpeg() {
@@ -141,9 +165,12 @@ export async function startMicRecording({ onStatus = () => {}, onError = () => {
   }
   if (!started) started = await startFfmpeg();
   if (!started) {
-    throw new Error(
-      "No microphone recorder available. Install ffmpeg (or run on Windows 10+) to use push-to-talk.",
-    );
+    if (startupError && /accessdenied|permission|microphone/i.test(startupError)) {
+      throw new Error(
+        "Microphone access was denied. Enable microphone access for desktop apps in Windows Settings → Privacy & security → Microphone, then press M again.",
+      );
+    }
+    throw new Error("No microphone recorder available. Install ffmpeg (or run on Windows 10+) to use push-to-talk.");
   }
 
   return {

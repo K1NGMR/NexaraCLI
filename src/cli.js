@@ -196,7 +196,7 @@ function printEffortEstimates(model, inputTokens) {
     .map((effort) => `${REASONING_EFFORT_LABELS[effort]} ~${Math.round(reasoningEffortComputeEstimate(model, effort, inputTokens)).toLocaleString()} Compute`)
     .join(" · ");
   console.log(color.dim(`Estimated Compute before sending (${formatTokens(inputTokens)} input tokens): ${estimates}`));
-  console.log(color.dim("Estimate uses an illustrative response budget; actual billing uses real provider usage."));
+  console.log(color.dim("Estimate uses an illustrative response budget; actual Compute usage is reported by the gateway."));
 }
 
 const CJK_RE = /[\u3000-\u303F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/g;
@@ -396,13 +396,13 @@ const SLASH_COMMANDS = [
   "/help", "/model", "/models", "/effort", "/attach", "/image", "/think", "/research",
   "/perplexity", "/plan", "/honest", "/goal", "/new", "/resume", "/threads", "/clear",
   "/compact", "/config", "/permission", "/permissions", "/tools", "/mcp", "/skills", "/plugins", "/agents", "/background", "/tasks", "/logs",
-  "/stop", "/download", "/open", "/reveal", "/login", "/update", "/status", "/quit", "/exit",
+  "/stop", "/download", "/open", "/reveal", "/doctor", "/login", "/update", "/status", "/quit", "/exit",
 ];
 
 const SLASH_COMMAND_DESCRIPTIONS = new Map([
   ["/help", "Show commands, shortcuts, login, and automation options."],
   ["/model", "Choose the AI model for this session or set a new default."],
-  ["/models", "Print the complete model catalog and pricing."],
+  ["/models", "Print the complete model catalog and Compute rates."],
   ["/effort", "Set reasoning effort: low, medium, high, extra high, or max."],
   ["/attach", "Attach an image, PDF, or text/code file to your next prompt."],
   ["/image", "Attach an image or clear the files waiting for your next prompt."],
@@ -432,6 +432,7 @@ const SLASH_COMMAND_DESCRIPTIONS = new Map([
   ["/download", "Show artifacts saved from the current session."],
   ["/open", "Open a local file with its system application."],
   ["/reveal", "Reveal a local file in Explorer or Finder."],
+  ["/doctor", "Check the CLI, account, workspace, and API configuration."],
   ["/login", "Sign in again or switch the active Nexara account."],
   ["/update", "Check for and install a newer CLI version."],
   ["/status", "Show account, model, thread, and context state."],
@@ -588,6 +589,29 @@ function isEscapeKey(str, key = {}) {
   return name === "escape" || sequence === "\u001b";
 }
 
+// Node's readline key names are not consistent across Windows Terminal,
+// ConHost, and application-keypad mode. Keep picker navigation in one place so
+// /model, /permission, and slash completion all understand normal arrows,
+// VT100 arrows, modified CSI arrows, Home/End, PageUp/PageDown, and the
+// physical numpad 8/2 keys. `allowNumpadDigits` is intentionally opt-in: a
+// typed `2` in `/model2` must remain text, while a raw picker has no text line
+// and can safely treat keypad digits as navigation.
+function navigationAction(str, key = {}, { allowNumpadDigits = false } = {}) {
+  const name = String(key.name || "").toLowerCase();
+  const sequence = String(key.sequence || str || "");
+  const csi = sequence.match(/\u001b\[[0-9;?]*([A-HF])$/)?.[1] || "";
+  const application = sequence.match(/\u001bO([ABHF])$/)?.[1] || "";
+  const direction = csi || application;
+  const isDigit = (value) => allowNumpadDigits && (name === value || sequence === value);
+  if (name === "up" || name === "k" || direction === "A" || isDigit("8")) return "up";
+  if (name === "down" || name === "j" || direction === "B" || isDigit("2")) return "down";
+  if (name === "pageup" || sequence === "\u001b[5~") return "pageup";
+  if (name === "pagedown" || sequence === "\u001b[6~") return "pagedown";
+  if (name === "home" || direction === "H" || sequence === "\u001b[1~") return "home";
+  if (name === "end" || direction === "F" || sequence === "\u001b[4~") return "end";
+  return null;
+}
+
 function installEscapeExit() {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") return () => {};
   emitKeypressEvents(input);
@@ -605,7 +629,10 @@ function installEscapeExit() {
     if (now - lastEscapeAt <= DOUBLE_ESCAPE_WINDOW_MS) {
       remove();
       if (input.isRaw) input.setRawMode(false);
-      output.write("\r\n\u001b[?25h");
+      // The mouse protocol may be enabled while a live Thinking line is
+      // visible. Since process.exit skips the interactive cleanup finally
+      // block, explicitly restore terminal mouse/cursor state before leaving.
+      output.write("\r\n\u001b[?1006l\u001b[?1000l\u001b[?25h");
       process.exit(0);
       return;
     }
@@ -1034,9 +1061,8 @@ function printLoginScreen() {
     `${color.coral("✦")} ${color.cream("Sign in to Nexara")}`,
     color.muted("Your account, models, and saved threads."),
     "",
-    `${color.coral("1")}  ${color.cream("Email and password")}`,
-    `${color.coral("2")}  ${color.cream("Continue with Google")}`,
-    `${color.coral("3")}  ${color.cream("Scan a QR code")}`,
+    `${color.coral("1")}  ${color.cream("Continue with Google")}`,
+    `${color.coral("2")}  ${color.cream("Scan a QR code")}`,
   ]);
   console.log(color.dim("  Select a method below. Your credentials stay inside the CLI sign-in flow.\n"));
 }
@@ -1534,20 +1560,15 @@ async function selectPermissionInteractive(currentMode, cwd = process.cwd()) {
     const onKeypress = (str, key = {}) => {
       const name = String(key.name || "").toLowerCase();
       const sequence = key.sequence || str || "";
-      const up = name === "up" || name === "k" || name === "8" || sequence === "\u001b[A" || sequence === "\u001bOA";
-      const down = name === "down" || name === "j" || name === "2" || sequence === "\u001b[B" || sequence === "\u001bOB";
-      const pageUp = name === "pageup" || sequence === "\u001b[5~";
-      const pageDown = name === "pagedown" || sequence === "\u001b[6~";
-      const home = name === "home" || sequence === "\u001b[H" || sequence === "\u001b[1~";
-      const end = name === "end" || sequence === "\u001b[F" || sequence === "\u001b[4~";
+      const action = navigationAction(str, key, { allowNumpadDigits: true });
       if (key.ctrl && name === "c") { finish(null, new Error("Aborted with Ctrl+C")); return; }
       if (isEscapeKey(str, key)) { finish(null); return; }
-      if (up) { move(-1); return; }
-      if (down) { move(1); return; }
-      if (pageUp) { move(-viewport); return; }
-      if (pageDown) { move(viewport); return; }
-      if (home) { selected = 0; redraw(); return; }
-      if (end) { selected = PERMISSION_OPTIONS.length - 1; redraw(); return; }
+      if (action === "up") { move(-1); return; }
+      if (action === "down") { move(1); return; }
+      if (action === "pageup") { move(-viewport); return; }
+      if (action === "pagedown") { move(viewport); return; }
+      if (action === "home") { selected = 0; redraw(); return; }
+      if (action === "end") { selected = PERMISSION_OPTIONS.length - 1; redraw(); return; }
       if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
         finish(PERMISSION_OPTIONS[selected].mode);
       }
@@ -1640,20 +1661,15 @@ async function selectModelInteractive(selected) {
     const onKeypress = (str, key = {}) => {
       const name = String(key.name || "").toLowerCase();
       const sequence = key.sequence || str || "";
-      const up = name === "up" || name === "k" || name === "8" || sequence === "\u001b[A" || sequence === "\u001bOA";
-      const down = name === "down" || name === "j" || name === "2" || sequence === "\u001b[B" || sequence === "\u001bOB";
-      const pageUp = name === "pageup" || sequence === "\u001b[5~";
-      const pageDown = name === "pagedown" || sequence === "\u001b[6~";
-      const home = name === "home" || sequence === "\u001b[H" || sequence === "\u001b[1~";
-      const end = name === "end" || sequence === "\u001b[F" || sequence === "\u001b[4~";
+      const action = navigationAction(str, key, { allowNumpadDigits: true });
       if (key.ctrl && name === "c") { finish(null, new Error("Aborted with Ctrl+C")); return; }
       if (isEscapeKey(str, key)) { finish(null); return; }
-      if (up) { move(-1); return; }
-      if (down) { move(1); return; }
-      if (pageUp) { move(-viewport); return; }
-      if (pageDown) { move(viewport); return; }
-      if (home) { activeModel = 0; redraw(); return; }
-      if (end) { activeModel = modelIndices.length - 1; redraw(); return; }
+      if (action === "up") { move(-1); return; }
+      if (action === "down") { move(1); return; }
+      if (action === "pageup") { move(-viewport); return; }
+      if (action === "pagedown") { move(viewport); return; }
+      if (action === "home") { activeModel = 0; redraw(); return; }
+      if (action === "end") { activeModel = modelIndices.length - 1; redraw(); return; }
       if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
         finish({ model: entries[selectedModelIndex()].id, sessionOnly: false });
         return;
@@ -1737,6 +1753,7 @@ ${color.cyan("Nexara CLI commands")}
   /download                    Show artifacts saved in .nexara-artifacts
   /open <path>                  Open a local file with the system app
   /reveal <path>                Reveal a file in Explorer/Finder
+  /doctor                       Diagnose CLI, workspace, account, and API setup
   /config                       Show config and local session paths
   /update                       Check for and install updates (when auto-update is off)
   /status                       Show account, model, and thread state
@@ -1905,22 +1922,6 @@ async function requireLogin(auth, config) {
   return config;
 }
 
-async function completeGoogleProfile(auth, user) {
-  const rl = readline.createInterface({ input, output });
-  try {
-    const name = (await rl.question(`Name${user.user_metadata?.full_name ? ` [${user.user_metadata.full_name}]` : ""}: `)).trim() || user.user_metadata?.full_name || "";
-    const email = (await rl.question(`Email [${user.email || ""}]: `)).trim() || user.email || "";
-    const password = await rl.question("Password (at least 6 characters): ", { hideEchoBack: true });
-    const confirmPassword = await rl.question("Confirm password: ", { hideEchoBack: true });
-    if (!name || !email || password.length < 6 || password !== confirmPassword) {
-      throw new Error("Name, email, and matching passwords (at least 6 characters) are required.");
-    }
-    await auth.completeProfile({ name, email, password });
-  } finally {
-    rl.close();
-  }
-}
-
 async function login(config, auth, useGoogle = false, useQr = false) {
   if (!useGoogle && !useQr) {
     printLoginScreen();
@@ -1928,9 +1929,9 @@ async function login(config, auth, useGoogle = false, useQr = false) {
     let selectedGoogle = false;
     let selectedQr = false;
     try {
-      const method = (await methodRl.question(`  ${color.cyan("How would you like to sign in?")} ${color.dim("[1] Email  [2] Google  [3] QR")}\n  › `)).trim().toLowerCase();
-      selectedGoogle = method === "2" || method === "g" || method === "google";
-      selectedQr = method === "3" || method === "q" || method === "qr";
+      const method = (await methodRl.question(`  ${color.cyan("How would you like to sign in?")} ${color.dim("[1] Google  [2] QR")}\n  › `)).trim().toLowerCase();
+      selectedGoogle = method === "1" || method === "g" || method === "google";
+      selectedQr = method === "2" || method === "q" || method === "qr";
     } finally {
       methodRl.close();
     }
@@ -1951,22 +1952,10 @@ async function login(config, auth, useGoogle = false, useQr = false) {
   }
   if (useGoogle) {
     const user = await auth.loginWithGoogle();
-    const providers = Array.isArray(user.app_metadata?.providers) ? user.app_metadata.providers : [];
-    if (providers.includes("google") && !providers.includes("email") && !user.user_metadata?.nexara_profile_complete) {
-      await completeGoogleProfile(auth, user);
-    }
     console.log(color.green(`Signed in as ${user.email || "your Google account"}.`));
     return;
   }
-  const rl = readline.createInterface({ input, output });
-  try {
-    const email = (await rl.question(`  ${color.cyan("Email")} › `)).trim();
-    const password = await rl.question(`  ${color.cyan("Password")} › `, { hideEchoBack: true });
-    const user = await auth.login(email, password);
-    console.log(color.green(`\n  ✓ Signed in as ${user.email || email}.`));
-  } finally {
-    rl.close();
-  }
+  throw new Error("Choose Google or QR sign-in. Email/password sign-in is not available in Nexara CLI.");
 }
 
 async function ensureSignedIn(config, auth, useGoogle = false, useQr = false) {
@@ -2062,6 +2051,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   const maxTurns = Math.max(1, Math.min(100, Number(state.maxTurns ?? state.config.maxTurns ?? 25)));
   let lastAssistant = null;
   let emptyContinuationRetries = 0;
+  let reconnectText = "";
   for (let turn = 1; turn <= maxTurns; turn += 1) {
     if (state.maxBudget && state.spentCompute >= state.maxBudget) {
       const messageText = `Stopped before another model turn because the ${state.maxBudget.toLocaleString()} Compute-unit session budget was reached.`;
@@ -2070,6 +2060,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       break;
     }
     const turnStartedAt = Date.now();
+    reconnectText = "";
     const activity = createActivityLine({
       quiet,
       streamJson: machine,
@@ -2096,6 +2087,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       if (!state.thinkingExpanded) activity.render();
     };
     state.toggleThinking = toggleThinking;
+    state.setThinkingMouse?.(true);
     onStart?.();
     const serverArtifacts = [];
     const controller = new AbortController();
@@ -2105,9 +2097,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     let streamedText = "";
     let responseStarted = false;
     const writeText = (delta) => {
+      streamedText += delta;
       if (machine) outputToolEvent(state, { type: "text-delta", delta });
       else if (state.outputFormat !== "json") {
-        streamedText += delta;
         if (!responseStarted) {
           responseStarted = true;
           activity.set("writing");
@@ -2125,6 +2117,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
         reasoningEffort: state.config.selectedReasoningEffort,
         mode,
         goal,
+        continueFrom: reconnectText || undefined,
         quiet,
         signal: controller.signal,
         onStatus: (status) => {
@@ -2162,6 +2155,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
         },
       }), {
         onRetry: async (_error, attempt, maxAttempts) => {
+          // The API has a reconnect protocol for a stream that was cut off by
+          // a platform/network boundary. Send the text that already reached
+          // this terminal so the next attempt can continue instead of
+          // restarting the answer from scratch.
+          reconnectText = streamedText;
           activity.clear();
           if (!quiet) composerNotice(state, `The model connection failed. Retrying (${attempt}/${maxAttempts - 1})…`, "amber");
           activity.render();
@@ -2185,6 +2183,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     } finally {
       if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
       state.toggleThinking = null;
+      state.setThinkingMouse?.(false);
     }
     activity.clear();
     state.clearComposer?.();
@@ -2514,6 +2513,20 @@ async function handleSlash(state, line) {
       console.log(`Config: ${state.configPath}`);
       console.log(`Local sessions: ${SESSION_DIR}`);
       return true;
+    case "/doctor": {
+      const checks = [];
+      const nodeVersion = process.versions.node.split(".").map(Number);
+      checks.push([nodeVersion[0] >= 20, `Node.js ${process.versions.node} (requires 20+)`]);
+      checks.push([Boolean(state.cwd && await fs.stat(state.cwd).catch(() => null)), `Workspace ${displayPath(state.cwd)}`]);
+      checks.push([Boolean(state.config.appUrl), `API endpoint ${state.config.appUrl || "missing"}`]);
+      checks.push([Boolean(state.config.noSessionPersistence || state.threadId || await fs.stat(SESSION_DIR).catch(() => null)), state.config.noSessionPersistence ? "Local session storage disabled by flag" : `Local sessions ${SESSION_DIR}`]);
+      checks.push([Boolean(await state.auth.user()), "Nexara account session"]);
+      checks.push([Boolean(input.isTTY && output.isTTY), "Interactive terminal"]);
+      console.log(`\n${color.coral("Nexara CLI diagnostics")}`);
+      checks.forEach(([ok, label]) => console.log(`  ${ok ? color.teal("✓") : color.red("×")} ${label}`));
+      console.log(color.dim("  No credential values are printed. Run /login if the account check fails."));
+      return true;
+    }
     case "/login": await login(state.config, state.auth); return true;
     case "/update": await runUpdateCommand([]); return true;
     case "/status": {
@@ -2615,8 +2628,14 @@ async function interactive(config, auth, configPath, existingState) {
       return;
     }
     // After readline accepts a line, the cursor is one row below the prompt.
-    // Move to the top of the footer and erase through the old prompt.
-    output.write(`\u001b[${composerFooterLines + 1}A\u001b[J`);
+    // Erase exactly the footer and prompt rows. `ESC[J` used to clear from
+    // there to the bottom of the terminal, which made the conversation appear
+    // to vanish whenever a queued message or tool event remounted the footer.
+    const rows = composerFooterLines + 1;
+    output.write(`\u001b[${rows}A`);
+    for (let index = 0; index < rows; index += 1) {
+      output.write(`\r\u001b[2K${index < rows - 1 ? "\u001b[1B" : ""}`);
+    }
     composerFooterLines = 0;
     state.composerFooterLines = 0;
   }
@@ -2763,19 +2782,20 @@ async function interactive(config, auth, configPath, existingState) {
   const onSlashKeypress = (str, key = {}) => {
     if (state.modalOpen || key.ctrl || key.meta || key.alt) return;
     const name = String(key.name || "").toLowerCase();
+    const action = navigationAction(str, key);
     if (name === "return" || name === "enter" || name === "escape") return;
     if (name === "tab") {
       setImmediate(fillSlashSuggestion);
       return;
     }
     const matches = slashSuggestionMatches(rl.line);
-    if (matches.length && ["up", "down", "pageup", "pagedown", "home", "end"].includes(name)) {
-      if (name === "home") slashSuggestionIndex = 0;
-      else if (name === "end") slashSuggestionIndex = matches.length - 1;
-      else if (name === "pageup") slashSuggestionIndex = Math.max(0, Math.max(0, slashSuggestionIndex) - 5);
-      else if (name === "pagedown") slashSuggestionIndex = Math.min(matches.length - 1, Math.max(-1, slashSuggestionIndex) + 5);
-      else if (name === "up") slashSuggestionIndex = slashSuggestionIndex < 0 ? matches.length - 1 : Math.max(0, slashSuggestionIndex - 1);
-      else if (name === "down") slashSuggestionIndex = slashSuggestionIndex < 0 ? 0 : Math.min(matches.length - 1, slashSuggestionIndex + 1);
+    if (matches.length && action) {
+      if (action === "home") slashSuggestionIndex = 0;
+      else if (action === "end") slashSuggestionIndex = matches.length - 1;
+      else if (action === "pageup") slashSuggestionIndex = Math.max(0, Math.max(0, slashSuggestionIndex) - 5);
+      else if (action === "pagedown") slashSuggestionIndex = Math.min(matches.length - 1, Math.max(-1, slashSuggestionIndex) + 5);
+      else if (action === "up") slashSuggestionIndex = slashSuggestionIndex < 0 ? matches.length - 1 : Math.max(0, slashSuggestionIndex - 1);
+      else if (action === "down") slashSuggestionIndex = slashSuggestionIndex < 0 ? 0 : Math.min(matches.length - 1, slashSuggestionIndex + 1);
       slashSuggestionInput = rl.line;
     }
     scheduleSlashSuggestions();
@@ -2791,10 +2811,17 @@ async function interactive(config, auth, configPath, existingState) {
     if (click) state.toggleThinking();
   };
 
+  let mouseReporting = false;
+  const setMouseReporting = (enabled) => {
+    if (!input.isTTY || !output.isTTY || mouseReporting === enabled) return;
+    mouseReporting = enabled;
+    output.write(enabled ? "\u001b[?1000h\u001b[?1006h" : "\u001b[?1006l\u001b[?1000l");
+  };
+  state.setThinkingMouse = setMouseReporting;
+
   input.on("keypress", onKeypress);
   input.on("keypress", onSlashKeypress);
   input.on("data", onMouseData);
-  if (input.isTTY && output.isTTY) output.write("\u001b[?1000h\u001b[?1006h");
   const pendingMessages = [];
   state.pendingMessages = pendingMessages;
   let activeRun = false;
@@ -2888,7 +2915,7 @@ async function interactive(config, auth, configPath, existingState) {
     input.removeListener("keypress", onKeypress);
     input.removeListener("keypress", onSlashKeypress);
     input.removeListener("data", onMouseData);
-    if (input.isTTY && output.isTTY) output.write("\u001b[?1006l\u001b[?1000l");
+    setMouseReporting(false);
     cancelSlashSuggestionTimer();
     clearSlashSuggestions(true);
     if (mic) await mic.stop().catch(() => {});

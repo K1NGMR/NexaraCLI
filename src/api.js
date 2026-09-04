@@ -115,6 +115,19 @@ export async function loadThread(auth, threadId) {
   };
 }
 
+function parseToolInput(value) {
+  if (value && typeof value === "object") return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
 function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult, onSource, onFinish, onReasoning) {
   const line = raw.trim();
   if (!line || line.startsWith(":")) return;
@@ -138,63 +151,83 @@ function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult,
     return;
   }
 
-  const metadata = event.metadata || event.messageMetadata || {};
-  if (event.type === "start") {
+  const type = String(event.type || "").toLowerCase();
+  const metadata = event.metadata || event.messageMetadata || state.metadata || {};
+  if (type === "message-metadata") {
+    state.metadata = event.messageMetadata || event.metadata || event;
+    if (state.metadata.model) state.model = state.metadata.model;
+    return;
+  }
+  if (type === "start") {
     if (metadata.model) state.model = metadata.model;
     onStatus?.("waiting");
-  } else if (event.type === "text-delta" || event.type === "text" || event.type === "textDelta") {
+  } else if (type === "start-step") {
+    onStatus?.("working");
+  } else if (type === "text-delta" || type === "text" || type === "textdelta") {
     const delta = event.delta ?? event.text ?? event.value ?? "";
     if (delta) {
       state.text += delta;
       onText(delta);
     }
-  } else if (event.type === "reasoning-delta" || event.type === "reasoning") {
+  } else if (type === "reasoning-start") {
+    onStatus?.("thinking");
+  } else if (type === "reasoning-delta" || type === "reasoning") {
     const delta = event.delta ?? event.text ?? event.value ?? "";
     if (delta) {
       state.reasoning += delta;
       onReasoning?.(delta);
     }
     onStatus?.("thinking");
-  } else if (event.type === "tool-input-start") {
+  } else if (type === "tool-input-start") {
+    state.toolInputs ??= new Map();
+    if (event.toolCallId) state.toolInputs.set(event.toolCallId, "");
     onStatus?.(`tool:${event.toolName || "tool"}`);
-  } else if (event.type === "tool-input-available") {
+  } else if (type === "tool-input-delta") {
+    state.toolInputs ??= new Map();
+    const toolCallId = event.toolCallId || "default";
+    state.toolInputs.set(toolCallId, `${state.toolInputs.get(toolCallId) || ""}${event.delta || event.inputText || ""}`);
+    onStatus?.(`tool:${event.toolName || "tool"}`);
+  } else if (type === "tool-input-available" || type === "tool-call") {
     const name = String(event.toolName || "");
     onStatus?.(`tool:${name || "tool"}`);
     if (CLI_CLIENT_TOOL_NAMES.has(name) && !state.nativeCall) {
       state.nativeCall = {
         name,
-        arguments: event.input && typeof event.input === "object" ? event.input : {},
+        arguments: parseToolInput(event.input ?? event.arguments ?? state.toolInputs?.get(event.toolCallId)),
         toolCallId: event.toolCallId || null,
       };
       onToolCall?.(state.nativeCall);
     }
-  } else if (event.type === "tool-output-available") {
+  } else if (type === "tool-output-available" || type === "tool-result") {
     onToolResult?.({
       name: event.toolName || "tool",
       toolCallId: event.toolCallId || null,
       output: event.output,
     });
-  } else if (event.type === "source-url" || event.type === "source-document") {
+  } else if (type === "source-url" || type === "source-document") {
     const source = event.url || event.source?.url || event.source;
     if (source) {
       state.sources.push(source);
       onSource?.(source);
     }
-  } else if (event.type === "finish") {
+  } else if (type === "finish-step") {
+    onStatus?.("finalizing");
+  } else if (type === "finish") {
     if (metadata.model) state.model = metadata.model;
     onFinish?.(event);
-    if (metadata.usage) {
-      const usage = metadata.usage;
+    if (metadata.usage || event.usage) {
+      const usage = metadata.usage || event.usage;
       const input = Number(usage.inputTokens) || 0;
       const output = Number(usage.outputTokens) || 0;
       if (input + output > 0) state.lastUsage = { inputTokens: input, outputTokens: output };
     }
-  } else if (event.type === "error" || event.type === "finish-error") {
-    throw new Error(event.errorText || event.error || "The Nexara stream failed.");
-  } else if (metadata.usage && event.type) {
+  } else if (type === "error" || type === "finish-error" || type === "tool-output-error") {
+    const detail = event.errorText || event.error || event.message || event.delta;
+    throw new Error(typeof detail === "string" ? detail : "The Nexara stream failed.");
+  } else if ((metadata.usage || event.usage) && type) {
     // The finish chunk carries the provider's REAL token counts (the same
     // numbers billing uses). Stash them so /status shows exact context.
-    const usage = metadata.usage;
+    const usage = metadata.usage || event.usage;
     const input = Number(usage.inputTokens) || 0;
     const output = Number(usage.outputTokens) || 0;
     if (input + output > 0) state.lastUsage = { inputTokens: input, outputTokens: output };
@@ -210,6 +243,7 @@ export async function sendChat({
   reasoningEffort,
   mode,
   goal,
+  continueFrom,
   onStatus,
   onText,
   onToolCall,
@@ -226,6 +260,7 @@ export async function sendChat({
     messages,
     threadId,
     model,
+    ...(typeof continueFrom === "string" && continueFrom.trim() ? { continueFrom } : {}),
     ...(typeof reasoningEffort === "string" ? { reasoningEffort } : {}),
   };
   if (mode) body.mode = mode;
@@ -250,7 +285,17 @@ export async function sendChat({
   // messages to fit the model's context window — it signals that through
   // these headers so the CLI can swap its local transcript too.
   const compacted = response.headers.get("x-nexara-compacted") === "1";
-  const summary = compacted ? decodeURIComponent(response.headers.get("x-nexara-summary") || "") : null;
+  const encodedSummary = response.headers.get("x-nexara-summary") || "";
+  let summary = null;
+  if (compacted && encodedSummary) {
+    try {
+      summary = decodeURIComponent(encodedSummary);
+    } catch {
+      // A malformed optional summary header must not turn a valid streamed
+      // response into a client-side failure.
+      summary = encodedSummary;
+    }
+  }
 
   const state = { text: "", reasoning: "", nativeCall: null, lastUsage: null, sources: [], model: null };
   const reader = response.body.getReader();

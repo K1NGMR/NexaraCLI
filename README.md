@@ -100,7 +100,7 @@ nexara login
 nexara login --qr
 ```
 
-Enter the same email and password used on Nexara Web. Use `nexara login --qr` to display a short-lived QR code and approve the CLI from a phone already signed in to Nexara. The refreshable Supabase session is stored in `%USERPROFILE%\\.nexara\\config.json` on Windows or `~/.nexara/config.json` on macOS/Linux. The file is permission-restricted where the operating system supports it. Never put a service-role key in this file.
+Use `nexara login --google` for browser-based Google sign-in, or `nexara login --qr` to display a short-lived QR code and approve the CLI from a phone already signed in to Nexara. The refreshable session is stored in `%USERPROFILE%\\.nexara\\config.json` on Windows or `~/.nexara/config.json` on macOS/Linux. The file is permission-restricted where the operating system supports it. Never put a service-role key in this file.
 
 Interactive conversations are also saved locally on the computer in `%USERPROFILE%\\.nexara\\sessions\\` on Windows or `~/.nexara/sessions/` on macOS/Linux. Each session is a JSON transcript containing its remote thread ID, messages, model, working directory, and timestamps. `/threads`, `/resume`, and `nexara --continue` use this local transcript first, with the remote thread as a fallback for older conversations. Use `--no-session-persistence` for a one-off run that should not create a local transcript.
 

@@ -125,10 +125,10 @@ export function createAuth(config = loadConfig()) {
     let redirectUrl;
     let resolveCallback;
     let rejectCallback;
-    // Supabase requires EXACT redirect URLs, so the callback port must be
-    // fixed (the documented allowlist entry is http://127.0.0.1:54321).
-    // Fall back once, then to an ephemeral port rather than never working.
-    let listenPort = 0;
+    // Supabase requires EXACT redirect URLs. An ephemeral fallback looks
+    // convenient but produces a redirect that is not in the provider's
+    // allowlist, so Google login then fails after the browser step.
+    let listenPort = null;
     for (const candidate of [54321, 54322]) {
       const free = await new Promise((resolve) => {
         const probe = net.createServer();
@@ -139,6 +139,9 @@ export function createAuth(config = loadConfig()) {
         listenPort = candidate;
         break;
       }
+    }
+    if (listenPort === null) {
+      throw new Error("Nexara CLI could not start Google sign-in because ports 54321 and 54322 are busy. Close the app using one and try again.");
     }
     const callbackDone = new Promise((resolve, reject) => {
       resolveCallback = resolve;

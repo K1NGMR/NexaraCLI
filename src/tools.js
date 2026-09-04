@@ -148,6 +148,7 @@ const ALLOWED_COMMANDS = new Set([
   "rustc",
   "sed",
   "ps",
+  "pkill",
   "tar",
   "tail",
   "tasklist",
@@ -731,7 +732,11 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
         const count = (content.match(matcher) || []).length;
         changes.push({ file, count, content });
       }
-      const dryRun = args.dryRun !== false;
+      // A tool named RenameSymbol should perform the requested rename after
+      // the normal approval gate. Preview is still available explicitly with
+      // dryRun=true; the old default silently did nothing and made the agent
+      // report a successful-looking no-op.
+      const dryRun = args.dryRun === true;
       if (!dryRun) for (const change of changes) await fs.writeFile(change.file, change.content.replace(matcher, to), "utf8");
       return `${dryRun ? "Preview" : "Renamed"} ${from} → ${to} in ${changes.length} file${changes.length === 1 ? "" : "s"}.\n${changes.map((change) => `${relativePath(change.file, cwd)} (${change.count} occurrence${change.count === 1 ? "" : "s"})`).join("\n") || "No matches."}`;
     }
@@ -995,7 +1000,10 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       }
       const processName = firstArg(args, "name");
       if (!processName || !/^[A-Za-z0-9_.-]+$/.test(processName)) throw new Error("KillProcess requires a numeric pid or a simple process image name.");
-      const result = await runCommand(`taskkill /IM "${processName}" /T /F`, cwd);
+      const command = process.platform === "win32"
+        ? `taskkill /IM "${processName}" /T /F`
+        : `pkill -TERM -x "${processName}"`;
+      const result = await runCommand(command, cwd);
       return `${result.stdout}${result.stderr}`.trim() || `Sent a termination request to ${processName}.`;
     }
     case "Zip": {
@@ -1012,6 +1020,20 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const archive = pathArg("archive_path", "path");
       const destination = pathArg("destination");
       await fs.mkdir(destination, { recursive: true });
+      // Archive member names are untrusted input. Reject absolute paths and
+      // traversal before extraction so a model cannot unpack over the project
+      // or the user's parent directories.
+      const listing = await runCommand(`tar -tf "${archive}"`, cwd, { allowOutside });
+      const unsafe = listing.stdout
+        .split(/\r?\n/)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .find((entry) => {
+          const member = entry.replaceAll("\\", "/");
+          const normalized = path.posix.normalize(member);
+          return member.startsWith("/") || /^[A-Za-z]:\//.test(member) || normalized === ".." || normalized.startsWith("../");
+        });
+      if (unsafe) throw new Error(`Refusing to extract unsafe archive member: ${unsafe}`);
       const result = await runCommand(`tar -xf "${archive}" -C "${destination}"`, cwd);
       return `${result.stdout}${result.stderr}`.trim() || `Extracted ${relativePath(archive, cwd)}.`;
     }
