@@ -180,6 +180,9 @@ Press Ctrl+C once to cancel an active generation; press Escape twice to exit
 the CLI entirely.
 The CLI exits cleanly when Escape is pressed twice, including during sign-in or
 workspace trust selection.
+When a model emits reasoning, click the live `Thinking… (click to expand)` line
+to open its emitted reasoning transcript; click again to collapse it. Models
+that do not expose reasoning will only show the normal activity indicator.
 
 ## Voice input (push-to-talk)
 

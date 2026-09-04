@@ -518,7 +518,7 @@ function activityText(status) {
   return ({
     waiting: "Processing shared Nexara context…",
     connecting: "Connecting to Nexara…",
-    thinking: "Thinking…",
+    thinking: "Thinking… (click to expand)",
     writing: "Writing response…",
     processing: "Processing shared context…",
     complete: "Done",
@@ -569,6 +569,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
       }
       visible = false;
     },
+    render,
     event: machine,
   };
 }
@@ -1716,6 +1717,7 @@ ${color.cyan("Nexara CLI commands")}
 
 ${color.dim("Voice: press M at the prompt to record your mic; press M again to")}
 ${color.dim("stop and transcribe your words into the input (speech-to-text).")}
+${color.dim("Thinking: click the live Thinking indicator to expand the model's emitted reasoning.")}
 ${color.dim("Tip: type / and press Tab to autocomplete commands; use ↑/↓ or numpad arrows to browse history.")}
 
 ${color.dim("Login options: nexara login, nexara login --google, nexara login --qr")}
@@ -2027,6 +2029,27 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       streamJson: machine,
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
     });
+    state.thinkingText = "";
+    state.thinkingExpanded = false;
+    const toggleThinking = () => {
+      if (!state.thinkingText && !state.thinkingExpanded) {
+        notice("Thinking is not available for this model or has not started yet.", "amber");
+        return;
+      }
+      state.thinkingExpanded = !state.thinkingExpanded;
+      state.clearComposer?.();
+      activity.clear();
+      if (state.thinkingExpanded) {
+        console.log(`\n  ${color.violet("Thinking · live")}`);
+        console.log(color.dim("  Click again to collapse · the text below is the model's emitted reasoning."));
+        process.stdout.write(`${state.thinkingText || "(waiting for reasoning…)"}\n`);
+      } else {
+        notice("Thinking collapsed.");
+      }
+      state.mountComposer?.();
+      if (!state.thinkingExpanded) activity.render();
+    };
+    state.toggleThinking = toggleThinking;
     onStart?.();
     const serverArtifacts = [];
     const controller = new AbortController();
@@ -2062,6 +2085,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
           activity.set(status);
         },
         onText: writeText,
+        onReasoning: (delta) => {
+          state.thinkingText += delta;
+          if (state.thinkingExpanded) {
+            state.clearComposer?.();
+            process.stdout.write(delta);
+            state.mountComposer?.();
+          }
+        },
         onToolCall: (call) => {
           activity.clear();
           state.clearComposer?.();
@@ -2092,9 +2123,16 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
         outputToolEvent(state, { type: "cancelled", message: messageText });
         return null;
       }
+      if (error?.code === "STREAM_TERMINATED") {
+        const messageText = error.message || "The response connection was terminated before the model finished. Please try again.";
+        if (!quiet) notice(messageText, "red");
+        outputToolEvent(state, { type: "error", code: error.code, message: messageText });
+        return null;
+      }
       throw error;
     } finally {
       if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
+      state.toggleThinking = null;
     }
     activity.clear();
     state.clearComposer?.();
@@ -2658,8 +2696,20 @@ async function interactive(config, auth, configPath, existingState) {
     scheduleSlashSuggestions();
   };
 
+  // Terminals that support SGR mouse reporting send clicks as escape
+  // sequences. While a model is reasoning, a click toggles the live thinking
+  // transcript; readline continues to own all normal text input.
+  const onMouseData = (chunk) => {
+    if (!state.toggleThinking || !state.thinkingText) return;
+    const data = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk || "");
+    const click = /\u001b\[<0;\d+;\d+M/.test(data);
+    if (click) state.toggleThinking();
+  };
+
   input.on("keypress", onKeypress);
   input.on("keypress", onSlashKeypress);
+  input.on("data", onMouseData);
+  if (input.isTTY && output.isTTY) output.write("\u001b[?1000h\u001b[?1006h");
   const pendingMessages = [];
   state.pendingMessages = pendingMessages;
   let activeRun = false;
@@ -2748,6 +2798,8 @@ async function interactive(config, auth, configPath, existingState) {
     rl.removeListener("close", onClose);
     input.removeListener("keypress", onKeypress);
     input.removeListener("keypress", onSlashKeypress);
+    input.removeListener("data", onMouseData);
+    if (input.isTTY && output.isTTY) output.write("\u001b[?1006l\u001b[?1000l");
     cancelSlashSuggestionTimer();
     clearSlashSuggestions(true);
     if (mic) await mic.stop().catch(() => {});

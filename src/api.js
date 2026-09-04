@@ -109,7 +109,7 @@ export async function loadThread(auth, threadId) {
   };
 }
 
-function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult, onSource, onFinish) {
+function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult, onSource, onFinish, onReasoning) {
   const line = raw.trim();
   if (!line || line.startsWith(":")) return;
   const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
@@ -143,6 +143,11 @@ function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult,
       onText(delta);
     }
   } else if (event.type === "reasoning-delta" || event.type === "reasoning") {
+    const delta = event.delta ?? event.text ?? event.value ?? "";
+    if (delta) {
+      state.reasoning += delta;
+      onReasoning?.(delta);
+    }
     onStatus?.("thinking");
   } else if (event.type === "tool-input-start") {
     onStatus?.(`tool:${event.toolName || "tool"}`);
@@ -205,6 +210,7 @@ export async function sendChat({
   onToolResult,
   onSource,
   onFinish,
+  onReasoning,
   signal,
   quiet = false,
 }) {
@@ -240,7 +246,7 @@ export async function sendChat({
   const compacted = response.headers.get("x-nexara-compacted") === "1";
   const summary = compacted ? decodeURIComponent(response.headers.get("x-nexara-summary") || "") : null;
 
-  const state = { text: "", nativeCall: null, lastUsage: null, sources: [], model: null };
+  const state = { text: "", reasoning: "", nativeCall: null, lastUsage: null, sources: [], model: null };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const writeText = onText ?? ((text) => process.stdout.write(text));
@@ -248,23 +254,39 @@ export async function sendChat({
   // The caller owns the chat turn header. Adding a leading newline here made
   // the assistant response feel detached from its prompt and created a
   // visible pause before the first streamed token.
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || "";
-    for (const line of lines) consumeDataLine(line, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish);
-    if (done) break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) consumeDataLine(line, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish, onReasoning);
+      if (done) break;
+    }
+    if (buffer) consumeDataLine(buffer, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish, onReasoning);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/terminated|prematurely|network|fetch failed|socket|connection/i.test(detail)) {
+      const wrapped = new Error("The response connection was terminated before the model finished. Please try again.");
+      wrapped.code = "STREAM_TERMINATED";
+      wrapped.cause = error;
+      throw wrapped;
+    }
+    throw error;
   }
-  if (buffer) consumeDataLine(buffer, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish);
   // The CLI owns the final response renderer. Do not emit a bare newline here:
   // doing so leaves an empty gap before the formatted assistant message.
 
   return {
     id: id(),
     role: "assistant",
-    parts: [{ type: "text", text: state.text }],
+    parts: [
+      ...(state.reasoning ? [{ type: "reasoning", text: state.reasoning }] : []),
+      { type: "text", text: state.text },
+    ],
     text: state.text,
+    reasoning: state.reasoning,
     compacted,
     summary,
     // Real provider usage for this turn (null when the stream carried none).
