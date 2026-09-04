@@ -521,7 +521,7 @@ function startComposerActivityAnimation(state) {
   };
 }
 
-function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, stableComposer = false } = {}) {
+function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, getCursorCol = () => 0, stableComposer = false } = {}) {
   const startedAt = Date.now();
   let status = "waiting";
   let frame = 0;
@@ -529,6 +529,16 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
   let timer = null;
   const machine = (event) => {
     if (streamJson) process.stdout.write(`${JSON.stringify(event)}\n`);
+  };
+  // Moving up `offset` rows to redraw the activity line, then back down
+  // `offset` rows, only restores the ROW -- cursor-down keeps whatever
+  // column the activity line's own text left it at, not the column readline
+  // had. Without this, the input caret visibly jumps to a different column
+  // every time this redraws, which is exactly what it looked like while a
+  // turn was in flight.
+  const restoreCol = () => {
+    const col = Math.max(0, Number(getCursorCol()) || 0);
+    return col ? `\r\u001b[${col}C` : "\r";
   };
   const render = () => {
     // readline owns the active composer row. Moving the cursor above it for a
@@ -543,7 +553,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     const paint = [color.coral, color.amber, color.teal, color.coral][frame % 4];
     const line = `\r\u001b[2K  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`;
     const offset = Math.max(0, Number(getCursorOffset()) || 0);
-    if (offset) output.write(`\u001b[${offset}A${line}\u001b[${offset}B`);
+    if (offset) output.write(`\u001b[${offset}A${line}\u001b[${offset}B${restoreCol()}`);
     else output.write(line);
   };
   if (!quiet && !streamJson && output.isTTY) {
@@ -565,7 +575,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
       timer = null;
       if (visible && output.isTTY && !streamJson && !stableComposer) {
         const offset = Math.max(0, Number(getCursorOffset()) || 0);
-        if (offset) output.write(`\u001b[${offset}A\r\u001b[2K\u001b[${offset}B`);
+        if (offset) output.write(`\u001b[${offset}A\r\u001b[2K\u001b[${offset}B${restoreCol()}`);
         else output.write("\r\u001b[2K");
       }
       visible = false;
@@ -2077,7 +2087,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   if (!trimmed) return null;
   state.cwd ||= process.cwd();
   state.spentCompute ||= 0;
-  state.maxTurns ||= state.config.maxTurns || 25;
+  state.maxTurns ||= state.config.maxTurns || 100;
   state.maxBudget ??= state.config.maxBudget;
   await ensureThread(state, trimmed.replace(/\s+/g, " "));
   const message = userMessage(trimmed, files);
@@ -2095,7 +2105,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   }
   const conversation = [...state.messages, message];
   await persistLocalSession(state, conversation);
-  const maxTurns = Math.max(1, Math.min(100, Number(state.maxTurns ?? state.config.maxTurns ?? 25)));
+  // 25 (the old default) is easily exhausted by a real multi-step task --
+  // each file read/write/delete is its own turn, so a from-scratch rebuild
+  // can need well over a hundred. Raised the default and the ceiling so a
+  // big task doesn't need manual intervention partway through.
+  const maxTurns = Math.max(1, Math.min(300, Number(state.maxTurns ?? state.config.maxTurns ?? 100)));
   let lastAssistant = null;
   let emptyContinuationRetries = 0;
   let reconnectText = "";
@@ -2111,8 +2125,6 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     const activity = createActivityLine({
       quiet,
       streamJson: machine,
-      // The anchored rail shows activity in its own footer, so the inline
-      // spinner stays quiet in interactive mode to avoid a second animation.
       // Was only suppressed here on the assumption the anchored rail showed
       // activity separately; that rail is no longer used (see the
       // fixedComposer note in interactive()), so this inline single-line
@@ -2120,6 +2132,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       // is now the activity indicator for interactive sessions too.
       stableComposer: false,
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
+      getCursorCol: () => state.getCursorCol ? state.getCursorCol() : 0,
     });
     state.thinkingText = "";
     state.thinkingExpanded = false;
@@ -2309,7 +2322,13 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
   }
   if (!lastAssistant) return null;
   if (lastAssistant.nativeCall) {
-    const messageText = `Paused after ${maxTurns} model turn${maxTurns === 1 ? "" : "s"} with ${lastAssistant.nativeCall.name} still pending. Raise --max-turns to continue.`;
+    // "Raise --max-turns" is a startup flag -- useless advice mid-REPL, since
+    // the thread already persisted the pending call and just needs another
+    // message to pick back up.
+    const continueHint = state.interactive
+      ? "Send another message (e.g. \"continue\") to keep going."
+      : "Raise --max-turns to continue.";
+    const messageText = `Paused after ${maxTurns} model turn${maxTurns === 1 ? "" : "s"} with ${lastAssistant.nativeCall.name} still pending. ${continueHint}`;
     if (!quiet) notice(messageText, "amber");
     outputToolEvent(state, { type: "turn-limit", message: messageText });
   }
@@ -2656,7 +2675,7 @@ async function interactive(config, auth, configPath, existingState) {
   state.outputFormat ||= "text";
   state.todos ||= [];
   state.interactive = true;
-  state.maxTurns ||= state.config.maxTurns || 25;
+  state.maxTurns ||= state.config.maxTurns || 100;
   state.maxBudget ??= state.config.maxBudget;
   state.spentCompute ||= 0;
   let startupPrintedLines = await countStdoutLines(async () => {
@@ -3079,17 +3098,22 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   state.refreshComposer = refreshComposer;
+  state.getCursorCol = () => typeof rl.getCursorPos === "function" ? Math.max(0, Number(rl.getCursorPos().cols) || 0) : 0;
 
   // Keep the transcript boundary and composer rail in sync when the terminal
   // is resized. Readline retains the current line, so remounting the rail is
   // enough to preserve typed text while moving the controls to the new bottom.
   const onResize = () => {
-    if (closing || rl.closed || !fixedComposer || !composerMounted) return;
+    if (closing || rl.closed || !composerMounted) return;
+    // Redraw the box at its new width/position so a live resize does not
+    // leave a stale-width rule or status line sitting above wherever the
+    // box now belongs -- this cannot use absolute addressing or a scroll
+    // region (see the fixedComposer note above), so it just re-runs the
+    // same relative clear-and-redraw every other update already uses.
     clearComposerFooter();
-    output.write(`\u001b[s\u001b[1;${transcriptBottom()}r\u001b[u`);
     showComposer();
   };
-  if (fixedComposer && typeof output.on === "function") output.on("resize", onResize);
+  if (typeof output.on === "function") output.on("resize", onResize);
 
   async function runInteractiveLine(line, files) {
     activeRun = true;
