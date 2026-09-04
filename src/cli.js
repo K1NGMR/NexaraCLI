@@ -462,6 +462,7 @@ const color = {
   amber: rgb(232, 165, 90),
   red: rgb(198, 69, 69),
   dim: (text) => ansi("2", text),
+  italicMuted: (text) => ansi("3;38;2;160;157;150", text),
   green: rgb(93, 184, 114),
   yellow: rgb(212, 160, 23),
   // Compatibility aliases retained while commands transition to the palette.
@@ -1329,7 +1330,6 @@ function userTurnLine(text) {
 }
 
 function printUserTurn(text, files = []) {
-  console.log();
   const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   console.log(`  ${color.dim(`[${stamp}]`)}`);
   for (const line of wrapChatText(text)) console.log(`  ${color.neon("▌")} ${color.cream(line)}`);
@@ -1339,8 +1339,8 @@ function printUserTurn(text, files = []) {
 }
 
 function printAssistantHeader(state, mode) {
-  const modeLabel = mode ? ` · ${mode}` : "";
-  process.stdout.write(`\n  ${color.coral("NEXARA")} ${color.muted(`· ${modelLabel(state.config.selectedModel)}${modeLabel}`)}\n`);
+  // Responses intentionally stay visually quiet, matching the reference:
+  // thinking owns its own disclosure row and the answer begins as plain text.
 }
 
 function printConversationHistory(state) {
@@ -1366,7 +1366,7 @@ function printConversationHistory(state) {
     }
     if (!text) continue;
     printAssistantHeader(state);
-    process.stdout.write(`${indentAssistantText(wrapRenderedTerminalMarkdown(renderTerminalMarkdown(text, { colorize: true })))}\n`);
+    process.stdout.write(`${indentAssistantText(wrapRenderedTerminalMarkdown(renderTerminalMarkdown(text, { colorize: false })))}\n`);
   }
   if (messages.some((message) => String(message?.role || "").toLowerCase() === "user" || String(message?.role || "").toLowerCase() === "assistant")) {
     console.log(color.dim("  ── live transcript ──"));
@@ -2260,6 +2260,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     });
     state.thinkingText = "";
     state.thinkingExpanded = false;
+    let thinkingRendered = false;
     const toggleThinking = () => {
       if (!state.thinkingText && !state.thinkingExpanded) {
         notice("Thinking is not available for this model or has not started yet.", "amber");
@@ -2269,9 +2270,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       state.clearComposer?.();
       activity.clear();
       if (state.thinkingExpanded) {
-        console.log(`\n  ${color.coral("✦")} ${color.cream("Thinking")}`);
-        console.log(color.dim("  Click again to collapse · the text below is the model's emitted reasoning."));
-        process.stdout.write(`${state.thinkingText || "(waiting for reasoning…)"}\n`);
+        state.prepareTranscript?.(String(state.thinkingText || "").split(/\r?\n/).length + 2);
+        console.log(`  ${color.cream("▾ Thinking")}`);
+        const reasoning = String(state.thinkingText || "(waiting for reasoning…)");
+        process.stdout.write(`${reasoning.split(/\r?\n/).map((line) => `    ${color.italicMuted(line)}`).join("\n")}\n`);
+        thinkingRendered = true;
       } else {
         notice("Thinking collapsed.");
       }
@@ -2391,8 +2394,16 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
       assistant.parts = [{ type: "text", text: responseText }];
     }
     if (responseText.trim() && state.outputFormat !== "json" && !machine) {
-      const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: !state.quiet }));
-      state.prepareTranscript?.(renderedResponse.split(/\r?\n/).length);
+      const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: false }));
+      const reasoning = String(state.thinkingText || "").trim();
+      if (reasoning && !thinkingRendered) {
+        const reasoningLines = reasoning.split(/\r?\n/);
+        state.prepareTranscript?.(reasoningLines.length + renderedResponse.split(/\r?\n/).length + 3);
+        console.log(`  ${color.cream("▾ Thinking")}`);
+        process.stdout.write(`${reasoningLines.map((line) => `    ${color.italicMuted(line)}`).join("\n")}\n\n`);
+      } else {
+        state.prepareTranscript?.(renderedResponse.split(/\r?\n/).length);
+      }
       process.stdout.write(`${indentAssistantText(renderedResponse)}\n`);
     }
     if (assistant.usage) {
