@@ -633,6 +633,109 @@ function navigationAction(str, key = {}, { allowNumpadDigits = false } = {}) {
   return null;
 }
 
+async function selectQuestionInteractive(question) {
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") return null;
+
+  let selected = 0;
+  let scrollTop = 0;
+  const chosen = new Set();
+  const viewport = Math.max(3, Math.min(question.options.length, pickerTerminalHeight() - 9));
+  const ensureVisible = () => {
+    if (selected < scrollTop) scrollTop = selected;
+    if (selected >= scrollTop + viewport) scrollTop = selected - viewport + 1;
+  };
+  const fit = (value, width) => {
+    const plain = String(value || "");
+    return shorten(plain, Math.max(1, width));
+  };
+  const render = () => {
+    ensureVisible();
+    const width = Math.max(64, terminalWidth());
+    const inner = width - 7;
+    const hint = question.multiSelect
+      ? "↑/↓ or numpad 8/2 move · Space toggle · Enter select · Esc cancel"
+      : "↑/↓ or numpad 8/2 move · Enter select · Esc cancel";
+    const lines = [
+      `  ${color.coral("╭")}${color.coral("─".repeat(width - 4))}${color.coral("╮")}`,
+      `  ${color.coral("│")} ${color.cream(fit(question.question, inner))}${" ".repeat(Math.max(0, inner - visibleLength(fit(question.question, inner))))} ${color.coral("│")}`,
+      `  ${color.coral("│")} ${color.muted(fit(hint, inner))}${" ".repeat(Math.max(0, inner - visibleLength(fit(hint, inner))))} ${color.coral("│")}`,
+      `  ${color.coral("├")}${color.coral("─".repeat(width - 4))}${color.coral("┤")}`,
+    ];
+    for (let offset = 0; offset < viewport; offset += 1) {
+      const index = scrollTop + offset;
+      const option = question.options[index];
+      if (!option) {
+        lines.push(`  ${color.coral("│")}${" ".repeat(width - 2)}${color.coral("│")}`);
+        continue;
+      }
+      const active = index === selected;
+      const checked = chosen.has(index);
+      const marker = question.multiSelect ? (checked ? color.teal("☑") : color.dim("☐")) : active ? color.coral("›") : color.dim("·");
+      const label = active ? color.cream(option.label) : color.muted(option.label);
+      const description = option.description ? color.dim(` — ${option.description}`) : "";
+      const content = fit(`  ${marker} ${label}${description}`, inner);
+      lines.push(`  ${color.coral("│")} ${content}${" ".repeat(Math.max(0, inner - visibleLength(content)))} ${color.coral("│")}`);
+    }
+    const footer = `${scrollTop ? "↑ more above · " : ""}${scrollTop + viewport < question.options.length ? "↓ more below" : "ready"}`;
+    lines.push(`  ${color.coral("├")}${color.coral("─".repeat(width - 4))}${color.coral("┤")}`);
+    lines.push(`  ${color.coral("│")} ${color.muted(footer)}${" ".repeat(Math.max(0, inner - visibleLength(footer)))} ${color.coral("│")}`);
+    lines.push(`  ${color.coral("╰")}${color.coral("─".repeat(width - 4))}${color.coral("╯")}`);
+    return lines;
+  };
+
+  emitKeypressEvents(input);
+  const previousRawMode = input.isRaw;
+  input.setRawMode(true);
+  input.resume();
+  let lines = render();
+  output.write(`\u001b[?25l${lines.join("\n")}`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      input.removeListener("keypress", onKeypress);
+      input.setRawMode(Boolean(previousRawMode));
+      output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const redraw = () => {
+      output.write(`\u001b[${lines.length - 1}A`);
+      lines = render();
+      output.write(lines.map((line) => `\u001b[2K\r${line}`).join("\n"));
+    };
+    const move = (delta) => {
+      selected = Math.max(0, Math.min(question.options.length - 1, selected + delta));
+      redraw();
+    };
+    const onKeypress = (str, key = {}) => {
+      const name = String(key.name || "").toLowerCase();
+      const sequence = key.sequence || str || "";
+      const action = navigationAction(str, key, { allowNumpadDigits: true });
+      if (key.ctrl && name === "c") { finish(null, new Error("Aborted with Ctrl+C")); return; }
+      if (isEscapeKey(str, key)) { finish(null); return; }
+      if (action === "up") { move(-1); return; }
+      if (action === "down") { move(1); return; }
+      if (action === "pageup") { move(-viewport); return; }
+      if (action === "pagedown") { move(viewport); return; }
+      if (action === "home") { selected = 0; redraw(); return; }
+      if (action === "end") { selected = question.options.length - 1; redraw(); return; }
+      if (question.multiSelect && (name === "space" || sequence === " ")) {
+        if (chosen.has(selected)) chosen.delete(selected); else chosen.add(selected);
+        redraw();
+        return;
+      }
+      if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
+        const indices = question.multiSelect && chosen.size ? [...chosen].sort((a, b) => a - b) : [selected];
+        finish(indices.map((index) => question.options[index].label));
+      }
+    };
+    input.on("keypress", onKeypress);
+  });
+}
+
 function installEscapeExit() {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") return () => {};
   emitKeypressEvents(input);
@@ -913,18 +1016,13 @@ async function askTerminalQuestion(state, rawInput) {
   state.clearComposer?.();
   const answers = [];
   for (const question of questions) {
-    console.log();
-    console.log(`  ${color.coral("?")} ${color.cream(question.question)}`);
-    question.options.forEach((option, index) => {
-      const description = option.description ? color.dim(` — ${option.description}`) : "";
-      console.log(`    ${color.coral(String(index + 1))} ${color.cream(option.label)}${description}`);
-    });
-    const answer = (await state.askQuestion(`${color.coral("  ›")} Choose a number or type your answer: `)).trim();
-    const selected = answer.split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
-      const index = Number(item) - 1;
-      return Number.isInteger(index) && question.options[index] ? question.options[index].label : item;
-    });
-    answers.push(`${question.header}: ${selected.join(", ") || "Continue with best judgment"}`);
+    const selected = state.askChoice
+      ? await state.askChoice(question)
+      : (await state.askQuestion(`${color.coral("  ›")} Choose a number or type your answer: `)).trim().split(",").map((item) => {
+        const index = Number(item.trim()) - 1;
+        return Number.isInteger(index) && question.options[index] ? question.options[index].label : item.trim();
+      }).filter(Boolean);
+    answers.push(`${question.header}: ${(selected || []).join(", ") || "Continue with best judgment"}`);
   }
   state.mountComposer?.();
   return answers.join("\n");
@@ -1057,9 +1155,14 @@ async function printBanner(config, user = null, { resumed = false } = {}) {
   console.log();
   // A terminal-native rendition of the reference's large outlined masthead.
   // Keep its green edge treatment while using Nexara CLI as the only brand.
-  for (const row of NEXARA_CLI_LOGO) {
-    const fitted = row.length > maxLogoWidth ? row.slice(0, maxLogoWidth) : row;
-    console.log(`  ${color.neon(fitted)}`);
+  if (maxLogoWidth < 96) {
+    console.log(`  ${color.neon("╔═╗ ╔═╗ ═╗ ╔═╗ ╦═╗ ╔═╗   ╔═╗ ╦  ╦")}`);
+    console.log(`  ${color.neon("║ ║ ║╣   ║ ╠═╣ ╠╦╝ ╠═╣   ║   ║  ║")}`);
+    console.log(`  ${color.neon("╚═╝ ╚═╝ ═╝ ╩ ╩ ╩╚═ ╩ ╩   ╚═╝ ╩═╝╩")}`);
+  } else {
+    for (const row of NEXARA_CLI_LOGO) {
+      console.log(`  ${color.neon(row)}`);
+    }
   }
   console.log();
   console.log(`  ${color.terminalWhite("Nexara CLI will run commands on your behalf to help you build.")}`);
@@ -2757,6 +2860,7 @@ async function interactive(config, auth, configPath, existingState) {
   };
   state.askApproval = async (message) => askInComposer(`\n  ${color.amber("! Approval required")}\n    ${message}`);
   state.askQuestion = async (message) => askInComposer(message);
+  state.askChoice = async (question) => selectQuestionInteractive(question);
 
   // Push-to-talk: press M at the prompt to start recording, press M again to
   // stop and transcribe. The transcript is appended to the current line.
