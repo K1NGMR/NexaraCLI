@@ -877,6 +877,13 @@ async function askTerminalQuestion(state, rawInput) {
   const questions = normalizeQuestionInput(rawInput);
   outputToolEvent(state, { type: "question", questions });
   if (!state.askQuestion) return "The CLI could not open an interactive question prompt; continue with sensible defaults.";
+  // Every other tool event unmounts the fixed composer rail before printing
+  // and remounts it after (see the tool-call/tool-result sites below). This
+  // one printed straight to the transcript with the rail still mounted and
+  // the scroll region still confined, so the question/options text landed
+  // on the rail's own rows instead of scrolling into the transcript — the
+  // "only one line visible, question and options gone" bug.
+  state.clearComposer?.();
   const answers = [];
   for (const question of questions) {
     console.log();
@@ -892,6 +899,7 @@ async function askTerminalQuestion(state, rawInput) {
     });
     answers.push(`${question.header}: ${selected.join(", ") || "Continue with best judgment"}`);
   }
+  state.mountComposer?.();
   return answers.join("\n");
 }
 
@@ -2636,6 +2644,13 @@ async function interactive(config, auth, configPath, existingState) {
   // Keep its height so a submitted line can remove it before the next turn
   // is committed, leaving the transcript growing down from the top.
   let composerFooterLines = 0;
+  // Remember exactly where the rail was last drawn (top row + total rows).
+  // A resize changes output.rows/columns before the 'resize' handler runs,
+  // so recomputing these from the CURRENT terminal size would erase the
+  // wrong rows and leave the old rail stuck on screen. Always clear at the
+  // position it was actually drawn.
+  let railTop = null;
+  let railRows = null;
   const fixedComposer = Boolean(input.isTTY && output.isTTY);
   const terminalRows = () => Math.max(8, Number(output.rows) || 24);
   // Four rows belong to the control rail: top rule, input, bottom rule, footer.
@@ -2656,8 +2671,12 @@ async function interactive(config, auth, configPath, existingState) {
 
   function clearComposerFooter() {
     if (fixedComposer) {
-      const rows = terminalRows();
-      const top = transcriptBottom() + 1;
+      // Clear at the rail's last actually-drawn position, not wherever the
+      // current terminal size says it "should" be — a resize between the
+      // draw and this call would otherwise erase the wrong rows and leave
+      // the stale rail visible (duplicate rail after maximizing the window).
+      const rows = railRows != null ? railRows : terminalRows();
+      const top = railTop != null ? railTop : transcriptBottom() + 1;
       // This function is intentionally safe to call more than once per turn:
       // onLine clears the rail, and runPrompt may clear it again while the
       // thread is being prepared. Preserve the current transcript position
@@ -2674,6 +2693,8 @@ async function interactive(config, auth, configPath, existingState) {
       composerMounted = false;
       composerFooterLines = 0;
       state.composerFooterLines = 0;
+      railTop = null;
+      railRows = null;
       return;
     }
     if (!composerFooterLines || !output.isTTY) {
@@ -2910,6 +2931,10 @@ async function interactive(config, auth, configPath, existingState) {
   function drawFixedComposerRail({ includeInput = false } = {}) {
     const rows = terminalRows();
     const top = transcriptBottom() + 1;
+    // Record where this draw actually landed so a later clear (which may
+    // run after a resize changes terminalRows()) still erases these rows.
+    railRows = rows;
+    railTop = top;
     const inputRow = rows - 2;
     const bottomRuleRow = rows - 1;
     const width = Math.max(20, Number(output.columns) || 80);
