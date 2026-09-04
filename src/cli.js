@@ -1658,16 +1658,16 @@ function slashSuggestionMatches(line) {
     .map((command) => ({ command, description: SLASH_COMMAND_DESCRIPTIONS.get(command) || "Run a Nexara command." }));
 }
 
-function renderSlashSuggestions(line, activeIndex = 0) {
+function renderSlashSuggestions(line, activeIndex = -1) {
   const matches = slashSuggestionMatches(line);
   if (!matches.length) return [];
   const limit = Math.max(3, Math.min(5, pickerTerminalHeight() - 14));
-  const bounded = Math.max(0, Math.min(matches.length - 1, activeIndex));
-  const start = Math.max(0, Math.min(bounded - limit + 1, matches.length - limit));
+  const bounded = activeIndex < 0 ? -1 : Math.max(0, Math.min(matches.length - 1, activeIndex));
+  const start = bounded < 0 ? 0 : Math.max(0, Math.min(bounded - limit + 1, matches.length - limit));
   const visible = matches.slice(start, start + limit);
   const commandWidth = 22;
   const rows = visible.map((entry, offset) => {
-    const active = start + offset === bounded;
+    const active = bounded >= 0 && start + offset === bounded;
     const command = entry.command.padEnd(commandWidth, " ");
     const commandText = active ? color.coral(command) : color.muted(command);
     const description = active ? color.cream(entry.description) : color.muted(entry.description);
@@ -2540,7 +2540,8 @@ async function interactive(config, auth, configPath, existingState) {
   // is committed, leaving the transcript growing down from the top.
   let composerFooterLines = 0;
   let slashSuggestionLines = 0;
-  let slashSuggestionIndex = 0;
+  let slashSuggestionIndex = -1;
+  let slashSuggestionInput = null;
   let slashSuggestionTimer = null;
 
   function cancelSlashSuggestionTimer() {
@@ -2575,7 +2576,8 @@ async function interactive(config, auth, configPath, existingState) {
     cancelSlashSuggestionTimer();
     if (!slashSuggestionLines || !output.isTTY) {
       slashSuggestionLines = 0;
-      slashSuggestionIndex = 0;
+      slashSuggestionIndex = -1;
+      slashSuggestionInput = null;
       return;
     }
     const rows = slashSuggestionLines;
@@ -2588,7 +2590,8 @@ async function interactive(config, auth, configPath, existingState) {
       output.write(`\r\u001b[${rows}A\u001b[${rows}M`);
     }
     slashSuggestionLines = 0;
-    slashSuggestionIndex = 0;
+    slashSuggestionIndex = -1;
+    slashSuggestionInput = null;
   }
 
   function drawSlashSuggestions() {
@@ -2604,6 +2607,15 @@ async function interactive(config, auth, configPath, existingState) {
 
   function scheduleSlashSuggestions() {
     if (!output.isTTY || state.modalOpen || slashSuggestionTimer) return;
+    if (rl.line !== slashSuggestionInput) {
+      slashSuggestionInput = rl.line;
+      const matches = slashSuggestionMatches(rl.line);
+      // `/` alone has no arbitrary selection. Once letters are typed, pick
+      // the closest match rather than always highlighting the first row.
+      slashSuggestionIndex = matches.length && rl.line.length > 1
+        ? matches.reduce((best, entry, index) => entry.command.length < matches[best].command.length ? index : best, 0)
+        : -1;
+    }
     slashSuggestionTimer = setImmediate(drawSlashSuggestions);
   }
 
@@ -2696,10 +2708,15 @@ async function interactive(config, auth, configPath, existingState) {
       setImmediate(fillSlashSuggestion);
       return;
     }
-    if (name === "up" && slashSuggestionMatches(rl.line).length) {
-      slashSuggestionIndex = Math.max(0, slashSuggestionIndex - 1);
-    } else if (name === "down" && slashSuggestionMatches(rl.line).length) {
-      slashSuggestionIndex = Math.min(slashSuggestionMatches(rl.line).length - 1, slashSuggestionIndex + 1);
+    const matches = slashSuggestionMatches(rl.line);
+    if (matches.length && ["up", "down", "pageup", "pagedown", "home", "end"].includes(name)) {
+      if (name === "home") slashSuggestionIndex = 0;
+      else if (name === "end") slashSuggestionIndex = matches.length - 1;
+      else if (name === "pageup") slashSuggestionIndex = Math.max(0, Math.max(0, slashSuggestionIndex) - 5);
+      else if (name === "pagedown") slashSuggestionIndex = Math.min(matches.length - 1, Math.max(-1, slashSuggestionIndex) + 5);
+      else if (name === "up") slashSuggestionIndex = slashSuggestionIndex < 0 ? matches.length - 1 : Math.max(0, slashSuggestionIndex - 1);
+      else if (name === "down") slashSuggestionIndex = slashSuggestionIndex < 0 ? 0 : Math.min(matches.length - 1, slashSuggestionIndex + 1);
+      slashSuggestionInput = rl.line;
     }
     scheduleSlashSuggestions();
   };
