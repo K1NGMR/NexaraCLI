@@ -2174,9 +2174,13 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     // Some provider streams close with an empty assistant payload. Do not
     // silently return the user to the prompt: retry the same continuation a
     // small, bounded number of times, preserving any tool result in context.
-    if (!call && !responseText.trim() && emptyContinuationRetries < 2 && turn < maxTurns) {
+    if (!call && !responseText.trim() && emptyContinuationRetries < 2) {
       emptyContinuationRetries += 1;
       if (!quiet) notice(`The model returned an empty continuation. Retrying (${emptyContinuationRetries}/2)…`, "amber");
+      // A transport/provider retry must not consume one of the user's agent
+      // turns. The for-loop increment would otherwise make maxTurns=1 exit
+      // before the retry ever runs.
+      turn -= 1;
       continue;
     }
     if (!call && !responseText.trim() && !quiet) {
@@ -2190,6 +2194,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart } = {}) 
     conversation.push(assistant);
     await persistLocalSession(state, conversation);
     const resultText = await runClientTool(state, call);
+    emptyContinuationRetries = 0;
     outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
     conversation.push(userMessage(`<tool_result name="${call.name}">\n${resultText}\n</tool_result>`));
     await persistLocalSession(state, conversation);
