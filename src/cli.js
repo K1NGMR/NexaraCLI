@@ -2571,6 +2571,7 @@ async function interactive(config, auth, configPath, existingState) {
   const fixedComposer = Boolean(input.isTTY && output.isTTY);
   const terminalRows = () => Math.max(8, Number(output.rows) || 24);
   const transcriptBottom = () => Math.max(3, terminalRows() - 3);
+  let transcriptCursorSaved = false;
   let slashSuggestionLines = 0;
   let slashSuggestionIndex = -1;
   let slashSuggestionInput = null;
@@ -2584,7 +2585,12 @@ async function interactive(config, auth, configPath, existingState) {
   function clearComposerFooter() {
     if (fixedComposer) {
       const rows = terminalRows();
-      output.write(`\u001b[${transcriptBottom() + 1};1H\u001b[2K\u001b[${rows - 1};1H\u001b[2K\u001b[${rows};1H\u001b[2K\u001b[${transcriptBottom()};1H\u001b[0m`);
+      output.write(`\u001b[${transcriptBottom() + 1};1H\u001b[2K\u001b[${rows - 1};1H\u001b[2K\u001b[${rows};1H\u001b[2K\u001b[0m`);
+      // `showComposer` saves the transcript position before moving to the
+      // fixed controls. Restore it so the next user/assistant turn appends
+      // directly after the header instead of jumping to the lower boundary.
+      if (transcriptCursorSaved) output.write("\u001b[u");
+      transcriptCursorSaved = false;
       composerFooterLines = 0;
       state.composerFooterLines = 0;
       return;
@@ -2801,6 +2807,8 @@ async function interactive(config, auth, configPath, existingState) {
       const inputRow = rows - 1;
       // Reserve the last three rows. The terminal scrolls only the transcript
       // above them, which makes the command box genuinely fixed at the bottom.
+      output.write("\u001b[s");
+      transcriptCursorSaved = true;
       output.write(`\u001b[1;${transcriptBottom()}r`);
       output.write(`\u001b[${statusRow};1H\u001b[2K  ${color.muted("/ for commands · Esc Esc exits")}\u001b[${inputRow};1H\u001b[48;2;54;49;45m\u001b[2K\u001b[0m\u001b[${rows};1H\u001b[2K  ${color.muted("Nexara · ready")}\u001b[${inputRow};1H`);
       rl.setPrompt("\u001b[48;2;54;49;45m\u001b[38;2;250;249;245m  ❯ \u001b[0m");
@@ -2893,7 +2901,7 @@ async function interactive(config, auth, configPath, existingState) {
 
   rl.on("line", onLine);
   rl.once("close", onClose);
-  if (fixedComposer) output.write(`\u001b[1;${transcriptBottom()}r\u001b[${transcriptBottom()};1H`);
+  if (fixedComposer) output.write(`\u001b[1;${transcriptBottom()}r`);
   showComposer();
   try {
     await interactiveFinished;
