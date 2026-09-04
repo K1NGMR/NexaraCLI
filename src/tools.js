@@ -204,8 +204,10 @@ export function toolAllowedByMode(name, mode = "ask") {
   if (mode === "read-only" || mode === "plan") return false;
   if (mode === "allow-edits") return EDIT_TOOLS.has(toolName);
   if (mode === "allow-commands") return EDIT_TOOLS.has(toolName) || COMMAND_TOOLS.has(toolName);
-  if (mode === "auto") return !new Set(["Delete", "KillProcess", "GitCommit", "GitCheckout", "GitStash", "OpenExternal", "OpenFile"]).has(toolName);
-  if (mode === "sandboxed") return true;
+  // Automatic and sandboxed modes must never silently grant arbitrary shell
+  // execution or destructive process/repository operations. Those require an
+  // explicit command-capable or full-access mode.
+  if (mode === "auto" || mode === "sandboxed") return EDIT_TOOLS.has(toolName);
   return mode === "full";
 }
 

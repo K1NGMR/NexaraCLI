@@ -59,6 +59,10 @@ try {
   $cliRoot = $archiveRoot.FullName
   $packageFile = Join-Path $cliRoot 'package.json'
   if (-not (Test-Path -LiteralPath $packageFile)) { Fail 'The NexaraCLI package was not found in the GitHub archive.' }
+  $package = Get-Content -LiteralPath $packageFile -Raw | ConvertFrom-Json
+  if ($package.version -ne $TargetVersion) {
+    Fail "Downloaded source version $($package.version) does not match requested version $TargetVersion."
+  }
 
   $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
   if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }

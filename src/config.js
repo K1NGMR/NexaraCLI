@@ -46,12 +46,16 @@ export function loadConfig() {
 export function saveConfig(patch) {
   const next = { ...loadConfig(), ...patch };
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  // Do not leave a partially-written token/config file if the process or
+  // machine stops mid-write. Write beside the target, protect it, then swap.
+  const tempFile = `${CONFIG_FILE}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempFile, `${JSON.stringify(next, null, 2)}\n`, "utf8");
   try {
-    if (process.platform !== "win32") fs.chmodSync(CONFIG_FILE, 0o600);
+    if (process.platform !== "win32") fs.chmodSync(tempFile, 0o600);
   } catch {
     // Best effort on filesystems without Unix permissions.
   }
+  fs.renameSync(tempFile, CONFIG_FILE);
   return next;
 }
 

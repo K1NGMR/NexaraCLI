@@ -545,7 +545,7 @@ function startComposerActivityAnimation(state) {
   };
 }
 
-function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, getCursorCol = () => 0, stableComposer = false } = {}) {
+function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, getCursorCol = () => 0, stableComposer = false, transcript = null } = {}) {
   const startedAt = Date.now();
   let status = "waiting";
   let frame = 0;
@@ -565,16 +565,24 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     return col ? `\r\u001b[${col}C` : "\r";
   };
   const render = () => {
-    // readline owns the active composer row. Moving the cursor above it for a
-    // spinner makes readline's internal cursor position stale, so typed text
-    // can appear in the middle of the transcript and queued lines get lost.
-    // Interactive sessions show the live state in the fixed footer instead;
-    // non-interactive TTY output keeps the standalone activity line behavior.
-    if (quiet || streamJson || !output.isTTY || stableComposer) return;
-    visible = true;
+    if (quiet || streamJson || !output.isTTY) return;
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
     const glyph = ACTIVITY_FRAMES[frame % ACTIVITY_FRAMES.length];
     const paint = [color.coral, color.amber, color.teal, color.coral][frame % 4];
+    // Preferred path: a reserved transcript row, painted in place at an
+    // absolute address, so the live status sits where the answer will land.
+    if (transcript?.begin?.()) {
+      const inline = `  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`;
+      if (transcript.paint?.(inline)) {
+        visible = true;
+        return;
+      }
+    }
+    // Fallback: readline owns the active composer row, so a relative move
+    // above it makes readline's cursor model stale. Interactive sessions
+    // without a reserved row keep the state in the fixed footer instead.
+    if (stableComposer) return;
+    visible = true;
     const line = `\r\u001b[2K  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`;
     const offset = Math.max(0, Number(getCursorOffset()) || 0);
     if (offset) output.write(`\u001b[${offset}A${line}\u001b[${offset}B${restoreCol()}`);
@@ -597,6 +605,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     clear() {
       if (timer) clearInterval(timer);
       timer = null;
+      transcript?.end?.();
       if (visible && output.isTTY && !streamJson && !stableComposer) {
         const offset = Math.max(0, Number(getCursorOffset()) || 0);
         if (offset) output.write(`\u001b[${offset}A\r\u001b[2K\u001b[${offset}B${restoreCol()}`);
@@ -2286,6 +2295,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       stableComposer: Boolean(state.interactive),
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
       getCursorCol: () => state.getCursorCol ? state.getCursorCol() : 0,
+      transcript: quiet ? null : {
+        begin: () => Boolean(state.beginTranscriptActivity?.()),
+        paint: (line) => Boolean(state.paintTranscriptActivity?.(line)),
+        end: () => state.endTranscriptActivity?.(),
+      },
     });
     state.thinkingText = "";
     state.thinkingExpanded = false;
@@ -2964,7 +2978,7 @@ async function interactive(config, auth, configPath, existingState) {
   // transcript text, anchor output at the scroll region's bottom so the rail
   // can never repaint over a just-submitted message.
   state.prepareTranscript = (reservedRows = 1) => {
-    if (!fixedComposer || !output.isTTY) return;
+    if (!fixedComposer || !output.isTTY) return null;
     // Reconcile logical placement with rows that were printed by tools,
     // notices, history, or other renderers outside this helper.
     transcriptFlowRow = Math.max(transcriptFlowRow, Math.min(transcriptBottom(), realContentRows + 1));
@@ -2972,6 +2986,54 @@ async function interactive(config, auth, configPath, existingState) {
     const start = Math.max(1, Math.min(transcriptFlowRow, transcriptBottom() - rows + 1));
     transcriptFlowRow = Math.min(transcriptBottom(), start + rows);
     output.write(`\u001b[1;${transcriptBottom()}r\u001b[${start};1H`);
+    return start;
+  };
+  // The live "Processing / Thinking / Writing" line belongs in the
+  // transcript, directly under the submitted message and exactly where the
+  // answer will appear -- the same place every other agent CLI puts it --
+  // not buried in the composer's status strip. It owns one reserved
+  // transcript row and is repainted in place at an absolute address wrapped
+  // in save/restore (\u001b7 / \u001b8), so readline's caret never moves. The
+  // earlier implementation moved the cursor RELATIVELY and had to guess the
+  // column on the way back, which is what desynced the input caret and got
+  // the inline line disabled for interactive sessions.
+  let activityRow = null;
+  state.beginTranscriptActivity = () => {
+    if (!fixedComposer || !output.isTTY) return false;
+    // A tool call, notice, or approval prompt printed during the turn pushes
+    // the transcript tail below the reserved row. Re-reserve so the live line
+    // keeps trailing the newest content instead of animating in place above
+    // it. realContentRows only counts newline-terminated writes, so the
+    // spinner's own in-place repaints never trigger this.
+    const tail = Math.min(transcriptBottom(), realContentRows + 1);
+    if (activityRow != null && tail <= activityRow) return true;
+    if (activityRow != null && activityRow <= transcriptBottom()) {
+      output.write(`\u001b7\u001b[${activityRow};1H\u001b[2K\u001b8`);
+    }
+    // prepareTranscript() parks the real cursor on the reserved row. That is
+    // correct when transcript text is about to be printed, but this runs on a
+    // timer while readline owns the caret -- bracket it so the caret lands
+    // back in the composer.
+    output.write(`\u001b7`);
+    activityRow = state.prepareTranscript(1);
+    output.write(`\u001b8`);
+    state.transcriptActivityActive = activityRow != null;
+    return state.transcriptActivityActive;
+  };
+  state.paintTranscriptActivity = (text) => {
+    if (activityRow == null || !output.isTTY) return false;
+    if (activityRow > transcriptBottom()) return false;
+    output.write(`\u001b7\u001b[${activityRow};1H\u001b[2K${text}\u001b8`);
+    return true;
+  };
+  state.endTranscriptActivity = () => {
+    if (activityRow == null) return;
+    if (activityRow <= transcriptBottom()) output.write(`\u001b7\u001b[${activityRow};1H\u001b[2K\u001b8`);
+    // Hand the reserved row back so the response (or the next tool line) is
+    // written over the spinner instead of leaving a blank gap behind it.
+    transcriptFlowRow = Math.max(1, activityRow);
+    activityRow = null;
+    state.transcriptActivityActive = false;
   };
   let transcriptCursorSaved = false;
   let composerMounted = false;
@@ -3254,7 +3316,9 @@ async function interactive(config, auth, configPath, existingState) {
   const interactiveFinished = new Promise((resolve) => { resolveInteractive = resolve; });
 
   function fixedComposerStatus() {
-    const activity = composerActivityLine(state);
+    // While the inline transcript line is showing the live status, the rail
+    // falls back to context/model so the same spinner is not on screen twice.
+    const activity = state.transcriptActivityActive ? null : composerActivityLine(state);
     if (activity) return activity;
     const used = lastRealContext(state) ?? contextOf(state.messages || []);
     const windowSize = MODEL_CONTEXT.get(state.config.selectedModel) ?? 128_000;

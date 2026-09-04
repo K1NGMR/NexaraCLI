@@ -1,6 +1,6 @@
 {
   "name": "nexara-cli",
-  "version": "0.1.72",
+  "version": "0.1.73",
   "description": "Nexara AI in your terminal — interactive chat, models, images, and scripts.",
   "type": "module",
   "bin": {
@@ -16,7 +16,8 @@
     "install.cmd"
   ],
   "scripts": {
-    "check": "node --check bin/nexara.js && node --check src/cli.js && node --check src/api.js && node --check src/auth.js && node --check src/config.js && node --check src/mic.js && node --check src/qr.js && node --check src/sessions.js && node --check src/update.js",
+    "check": "node --check bin/nexara.js && node --check src/api.js && node --check src/auth.js && node --check src/cli.js && node --check src/config.js && node --check src/mic.js && node --check src/qr.js && node --check src/sessions.js && node --check src/terminal-editor.js && node --check src/tools.js && node --check src/update.js",
+    "test": "node --test test/**/*.test.js",
     "smoke": "node ./bin/nexara.js --help",
     "pack:check": "npm pack --dry-run"
   },
