@@ -1461,7 +1461,8 @@ function printUserTurn(text, files = [], timestamp = null) {
 }
 
 function printAssistantHeader(state, mode) {
-  console.log(`  ${color.coral("Nexara")} ${color.dim("· Model Cat")}`);
+  const model = modelLabel(state?.config?.selectedModel);
+  console.log(`  ${color.coral("Nexara")} ${color.dim(`· ${model}`)}`);
 }
 
 function printConversationHistory(state) {
@@ -3155,7 +3156,7 @@ async function interactive(config, auth, configPath, existingState) {
     : readline.createInterface({
       input,
       output,
-      prompt: color.coral("  ❯ "),
+      prompt: color.coral("  › "),
       completer: (line) => [[], line],
       crlfDelay: Infinity,
       terminal: false,
