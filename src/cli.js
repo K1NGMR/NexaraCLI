@@ -999,10 +999,10 @@ function isToolConfigured(state, name) {
 
 function toolAccessDecision(state, name) {
   if (!isToolConfigured(state, name)) return { action: "deny", reason: "blocked by disallowed-tools" };
-  if (!isMutatingTool(name)) return { action: "allow" };
-  if (Array.isArray(state.config.allowedTools) && state.config.allowedTools.some((rule) => toolRuleMatches(rule, name))) return { action: "allow" };
   const mode = effectivePermissionMode(state);
   if (mode === "read-only" || mode === "plan") return { action: "deny", reason: permissionModeLabel(mode) };
+  if (!isMutatingTool(name)) return { action: "allow" };
+  if (Array.isArray(state.config.allowedTools) && state.config.allowedTools.some((rule) => toolRuleMatches(rule, name))) return { action: "allow" };
   if (toolAllowedByMode(name, mode)) return { action: "allow" };
   return { action: "ask" };
 }
@@ -1060,7 +1060,7 @@ async function requestToolApproval(state, name, args, { outsidePaths = [] } = {}
   )).trim().toLowerCase();
   if (answer === "a" || answer === "always") {
     const current = Array.isArray(state.config.allowedTools) ? state.config.allowedTools : [];
-    if (!current.includes(name)) state.config = saveConfig({ allowedTools: [...current, name] });
+    if (!current.includes(name)) state.config = { ...state.config, ...saveConfig({ allowedTools: [...current, name] }) };
     return true;
   }
   return answer === "y" || answer === "yes";
@@ -1087,7 +1087,10 @@ async function runClientTool(state, call) {
       printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
       return message;
     }
-    if (outsideApprovalRequired && effectivePermissionMode(state) !== "sandboxed") state.allowOutsidePaths = true;
+    if (outsideApprovalRequired && effectivePermissionMode(state) !== "sandboxed") {
+      state.approvedOutsideActions ??= new Set();
+      state.approvedOutsideActions.add(`${name}:${outsidePaths.join("|")}`);
+    }
   }
   try {
     const result = await executeCliTool(name, args, { cwd: state.cwd, allowOutside: outsidePaths.length > 0 });
@@ -1458,10 +1461,12 @@ function renderTerminalInlineMarkdown(value, colorize = true) {
   line = line.replace(/(\*\*|__)(.+?)\1/g, (_match, _marker, content) => stash(colorize ? ansi("1;38;2;250;249;245", content) : content));
   line = line.replace(/~~(.+?)~~/g, (_match, content) => stash(paint(color.dim, content)));
   line = line.replace(/(?<!\w)(\*|_)([^*_\n]+)\1(?!\w)/g, (_match, _marker, content) => stash(colorize ? ansi("3;38;2;160;157;150", content) : content));
-  line = line.replace(/\u0000(\d+)\u0000/g, (_match, index) => tokens[Number(index)] || "");
   // If a model sends an unmatched emphasis marker, never expose the raw
   // Markdown punctuation as part of the user-facing answer.
-  return line.replace(/\*\*|__/g, "");
+  line = line.replace(/\*\*|__/g, "");
+  // Restore protected code/link spans last so punctuation in identifiers such
+  // as __init__ is never interpreted as Markdown.
+  return line.replace(/\u0000(\d+)\u0000/g, (_match, index) => tokens[Number(index)] || "");
 }
 
 function renderTerminalMarkdown(text, { colorize = true } = {}) {
@@ -2192,7 +2197,7 @@ async function ensureThread(state, title = "New chat") {
   state.sessionTitle = thread.title || title;
   state.sessionCreatedAt = thread.created_at || new Date().toISOString();
   state.messages = [];
-  if (!state.config.noSessionPersistence) state.config = saveConfig({ lastThreadId: thread.id });
+  if (!state.config.noSessionPersistence) state.config = { ...state.config, ...saveConfig({ lastThreadId: thread.id }) };
 }
 
 async function loadSavedThread(auth, threadId) {
@@ -3524,8 +3529,8 @@ async function interactive(config, auth, configPath, existingState) {
       showComposer();
       return;
     }
-    const files = state.pendingImages.slice();
-    state.pendingImages = [];
+    const files = line.startsWith("/") ? [] : state.pendingImages.slice();
+    if (!line.startsWith("/")) state.pendingImages = [];
     if (activeRun) {
       pendingMessages.push({ line, files });
       state.prepareTranscript?.(userTurnRows(line, files) + 1);
@@ -3585,7 +3590,9 @@ async function readPipedInput() {
 
 async function oneShot(config, auth, options, configPath) {
   await requireLogin(auth, config);
-  const prompt = options.prompt.join(" ") || (!process.stdin.isTTY ? await readPipedInput() : "");
+  const piped = !process.stdin.isTTY ? await readPipedInput() : "";
+  const instruction = options.prompt.join(" ");
+  const prompt = instruction && piped ? `${instruction}\n\nInput:\n${piped}` : instruction || piped;
   if (!prompt) throw new Error("Provide a prompt, e.g. `nexara -p \"Summarize this\"`, or pipe input.");
   const images = await Promise.all(options.images.map(readImage));
   const state = {

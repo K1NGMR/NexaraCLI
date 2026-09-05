@@ -213,6 +213,7 @@ function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult,
   } else if (type === "finish-step") {
     onStatus?.("finalizing");
   } else if (type === "finish") {
+    state.finished = true;
     if (metadata.model) state.model = metadata.model;
     onFinish?.(event);
     if (metadata.usage || event.usage) {
@@ -301,7 +302,7 @@ export async function sendChat({
     }
   }
 
-  const state = { text: "", reasoning: "", nativeCall: null, lastUsage: null, sources: [], model: null };
+  const state = { text: "", reasoning: "", nativeCall: null, lastUsage: null, sources: [], model: null, finished: false };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const writeText = onText ?? ((text) => process.stdout.write(text));
@@ -319,6 +320,11 @@ export async function sendChat({
       if (done) break;
     }
     if (buffer) consumeDataLine(buffer, state, onStatus, writeText, onToolCall, onToolResult, onSource, onFinish, onReasoning);
+    if (!state.finished) {
+      const error = new Error("The response connection ended before the model finished.");
+      error.code = "STREAM_TERMINATED";
+      throw error;
+    }
   } catch (error) {
     if (signal?.aborted) throw error;
     const detail = error instanceof Error ? error.message : String(error);

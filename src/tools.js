@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -229,6 +230,18 @@ export function resolveWorkspacePath(value, cwd, { allowOutside = false } = {}) 
     error.code = "OUTSIDE_WORKSPACE";
     error.path = resolved;
     throw error;
+  }
+  if (!allowOutside && fsSync.existsSync(cwd)) {
+    let probe = resolved;
+    while (!fsSync.existsSync(probe) && probe !== path.dirname(probe)) probe = path.dirname(probe);
+    const realRoot = fsSync.existsSync(cwd) ? fsSync.realpathSync.native(cwd) : path.resolve(cwd);
+    const realProbe = fsSync.existsSync(probe) ? fsSync.realpathSync.native(probe) : path.resolve(probe);
+    if (!isInside(realRoot, realProbe)) {
+      const error = new Error(`Path resolves outside the workspace: ${resolved}`);
+      error.code = "OUTSIDE_WORKSPACE";
+      error.path = resolved;
+      throw error;
+    }
   }
   return resolved;
 }
