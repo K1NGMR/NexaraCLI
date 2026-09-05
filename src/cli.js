@@ -3206,11 +3206,11 @@ async function interactive(config, auth, configPath, existingState) {
   // last two rows of the rail -- silently never appear (only the top rule
   // and the input row, which land a row or two higher, are ever seen).
   const terminalRows = () => Math.max(8, (Number(output.rows) || 24) - 1);
-  // The rail owns a status row, a frame row, a three-row wrapping editor, and
-  // a bottom frame row. Chat output is constrained above this boundary.
+  // The rail mirrors OpenCode's prompt stack: a three-row editor, a model /
+  // shortcut metadata row, then the workspace/version footer.
   // Everything above that boundary is the transcript and uses the terminal's
   // normal top-to-bottom scroll direction.
-  const transcriptBottom = () => Math.max(3, terminalRows() - (COMPOSER_INPUT_ROWS + 3));
+  const transcriptBottom = () => Math.max(3, terminalRows() - (COMPOSER_INPUT_ROWS + 2));
   // Logical cursor for transcript content. The first turn should follow the
   // header near the top (as in the reference), not jump to the bottom just
   // because the composer is fixed there. Once content fills the viewport the
@@ -3573,16 +3573,16 @@ async function interactive(config, auth, configPath, existingState) {
     return `${lead} ${color.muted(label)} ${color.dim("·")} ${color.muted(`${percent}% context`)}`;
   }
 
-  function fixedComposerFooter() {
+  function fixedComposerMetadata() {
     const model = color.muted(modelLabel(state.config.selectedModel));
-    const details = state.busy ? color.muted("· working · Ctrl+C cancels") : color.muted("· / commands");
+    const details = state.busy ? color.muted("esc interrupt") : color.muted("tab agents   ctrl+p commands");
     return `${model} ${details}`;
   }
 
   function fixedComposerFooterLine() {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
-    const left = shorten(`  ${color.muted(displayPath())}  ${fixedComposerFooter()}`, Math.max(8, width - 2));
+    const left = shorten(`  ${color.muted(displayPath())}`, Math.max(8, width - 2));
     const end = color.muted(`Nexara CLI ${CURRENT_VERSION}`);
     const availableEnd = Math.max(0, width - visibleLength(left) - 2);
     const fittedEnd = availableEnd ? shorten(end, availableEnd) : "";
@@ -3590,12 +3590,20 @@ async function interactive(config, auth, configPath, existingState) {
     return `${left}${" ".repeat(gap)}${fittedEnd}`;
   }
 
+  function fixedComposerMetadataLine() {
+    const columns = Math.max(20, Number(output.columns) || 80);
+    const width = Math.max(20, columns - 1);
+    const metadata = shorten(fixedComposerMetadata(), width);
+    return `${metadata}${" ".repeat(Math.max(0, width - visibleLength(metadata)))}`;
+  }
+
   function refreshFixedStatus() {
     if (!composerMounted || railTop == null) return;
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
     const status = shorten(fixedComposerFooterLine(), width);
-    output.write(`\u001b7\u001b[${railTop};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${status}\u001b[0m\u001b8`);
+    const statusRow = railRows ?? terminalRows();
+    output.write(`\u001b7\u001b[${statusRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${status}\u001b[0m\u001b8`);
   }
 
   function drawFixedComposerRail({ includeInput = false } = {}) {
@@ -3605,17 +3613,18 @@ async function interactive(config, auth, configPath, existingState) {
     // run after a resize changes terminalRows()) still erases these rows.
     railRows = rows;
     railTop = top;
-    const inputStartRow = top + 1;
+    const inputStartRow = top;
+    const metadataRow = top + COMPOSER_INPUT_ROWS;
     const bottomRuleRow = rows;
     // Keep one column of safety on the right edge for Windows Terminal.
     const width = Math.max(20, Number(output.columns) || 80);
-    output.write(`\u001b[${top};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
+    output.write(`\u001b[${metadataRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerMetadataLine()}\u001b[0m`);
     if (includeInput) {
-      for (let row = inputStartRow; row < bottomRuleRow; row += 1) {
+      for (let row = inputStartRow; row < metadataRow; row += 1) {
         output.write(`\u001b[${row};1H\u001b[2K\u001b[0m`);
       }
     }
-    output.write(`\u001b[${bottomRuleRow};1H\u001b[2K\u001b[0m`);
+    output.write(`\u001b[${bottomRuleRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
   }
 
   function showComposer() {
@@ -3623,7 +3632,7 @@ async function interactive(config, auth, configPath, existingState) {
     clearComposerFooter();
     if (fixedComposer) {
       const rows = terminalRows();
-      const inputRow = transcriptBottom() + 2;
+      const inputRow = transcriptBottom() + 1;
       // Save the transcript cursor, then draw a dedicated four-row rail. The
       // scroll region prevents long responses from ever pushing the controls.
       output.write("\u001b[s");
