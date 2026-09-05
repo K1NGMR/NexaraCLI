@@ -252,7 +252,15 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
       const usage = metadata.usage || event.usage;
       const input = Number(usage.inputTokens) || 0;
       const output = Number(usage.outputTokens) || 0;
-      if (input + output > 0) state.lastUsage = { inputTokens: input, outputTokens: output };
+      if (input + output > 0 || Number.isFinite(Number(usage.compute ?? usage.computeUnits ?? usage.billedCompute))) {
+        state.lastUsage = {
+          inputTokens: input,
+          outputTokens: output,
+          ...(Number.isFinite(Number(usage.compute)) ? { compute: Number(usage.compute) } : {}),
+          ...(Number.isFinite(Number(usage.computeUnits)) ? { computeUnits: Number(usage.computeUnits) } : {}),
+          ...(Number.isFinite(Number(usage.billedCompute)) ? { billedCompute: Number(usage.billedCompute) } : {}),
+        };
+      }
     }
   } else if (type === "error" || type === "finish-error" || type === "tool-output-error") {
     const detail = event.errorText || event.error || event.message || event.delta;
@@ -263,7 +271,15 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
     const usage = metadata.usage || event.usage;
     const input = Number(usage.inputTokens) || 0;
     const output = Number(usage.outputTokens) || 0;
-    if (input + output > 0) state.lastUsage = { inputTokens: input, outputTokens: output };
+    if (input + output > 0 || Number.isFinite(Number(usage.compute ?? usage.computeUnits ?? usage.billedCompute))) {
+      state.lastUsage = {
+        inputTokens: input,
+        outputTokens: output,
+        ...(Number.isFinite(Number(usage.compute)) ? { compute: Number(usage.compute) } : {}),
+        ...(Number.isFinite(Number(usage.computeUnits)) ? { computeUnits: Number(usage.computeUnits) } : {}),
+        ...(Number.isFinite(Number(usage.billedCompute)) ? { billedCompute: Number(usage.billedCompute) } : {}),
+      };
+    }
   }
 }
 

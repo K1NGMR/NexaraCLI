@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { consumeDataLine } from "../src/api.js";
-import { toolAccessDecision } from "../src/cli.js";
+import { toolAccessDecision, usageCompute } from "../src/cli.js";
 
 function stateFor(permissionMode) {
   return { config: { permissionMode, allowedTools: [], disallowedTools: [] } };
@@ -30,6 +30,14 @@ test("an explicitly allowed mutating tool still cannot override read-only/plan m
 test("disallowed-tools always denies, even non-mutating tools", () => {
   const state = { config: { permissionMode: "full", allowedTools: [], disallowedTools: ["Read"] } };
   assert.equal(toolAccessDecision(state, "Read").action, "deny");
+});
+
+test("billed server Compute takes precedence over stale client pricing", () => {
+  assert.equal(usageCompute("openai/gpt-5.6-luna", { compute: 321 }), 321);
+});
+
+test("unknown pricing is not silently treated as zero", () => {
+  assert.equal(usageCompute("provider/new-model", { inputTokens: 1000, outputTokens: 1000 }), null);
 });
 
 function freshApiState() {

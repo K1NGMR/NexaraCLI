@@ -2334,9 +2334,16 @@ async function loadSavedThread(auth, threadId, accountId = null) {
   return { local: false, ...remote };
 }
 
-function usageCompute(model, usage) {
+export function usageCompute(model, usage) {
+  if (!usage || typeof usage !== "object") return null;
+  // Prefer the server's billed amount whenever it is present. Client-side
+  // price tables are only a fallback because they can lag the gateway.
+  for (const key of ["compute", "computeUnits", "billedCompute", "creditUnits"]) {
+    const billed = Number(usage[key]);
+    if (Number.isFinite(billed) && billed >= 0) return billed;
+  }
   const pricing = MODEL_PRICING.get(model);
-  if (!pricing || !usage) return 0;
+  if (!pricing) return null;
   const providerCost = ((Number(usage.inputTokens) || 0) * pricing.input + (Number(usage.outputTokens) || 0) * pricing.output) / 1_000_000;
   return Math.max(0, Math.round(providerCost * COMPUTE_PER_DOLLAR));
 }
@@ -2627,7 +2634,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     }
     if (assistant.usage) {
       state.lastUsage = assistant.usage;
-      state.spentCompute += usageCompute(assistant.model || state.config.selectedModel, assistant.usage);
+      const turnCompute = usageCompute(assistant.model || state.config.selectedModel, assistant.usage);
+      if (turnCompute == null && state.maxBudget) {
+        const messageText = "The server did not report billable Compute and this model has no trusted local price. Stopping before another turn so --max-budget cannot be bypassed.";
+        if (!quiet) composerNotice(state, messageText, "amber");
+        outputToolEvent(state, { type: "budget-unknown", message: messageText });
+        break;
+      }
+      if (turnCompute != null) state.spentCompute += turnCompute;
     }
     for (const artifact of serverArtifacts) {
       const saved = await saveServerArtifact(state, artifact.name, artifact.output).catch(() => null);
