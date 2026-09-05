@@ -866,7 +866,10 @@ function enterTerminalScreen() {
 function restoreTerminalScreen() {
   if (!alternateScreenActive) return;
   alternateScreenActive = false;
-  output.write("\u001b[?1006l\u001b[?1000l\u001b[?2004l\u001b[?1004l\u001b[?1049l\u001b[?25h\u001b[0m");
+  // Restore the shell buffer, then erase the command line position that the
+  // TUI inherited. Without this final line cleanup, Windows Terminal can
+  // leave fragments of the launch command or typed input behind the prompt.
+  output.write("\u001b[?1006l\u001b[?1000l\u001b[?2004l\u001b[?1004l\u001b[?1049l\u001b[?25h\u001b[0m\r\u001b[2K\r\n");
 }
 
 function clearTerminalForSession() {
