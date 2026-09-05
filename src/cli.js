@@ -2245,7 +2245,12 @@ async function login(config, auth, useGoogle = false, useQr = false) {
 }
 
 async function ensureSignedIn(config, auth, useGoogle = false, useQr = false) {
-  if (await auth.accessToken()) return;
+  // A cached access token can still be present after the Supabase session has
+  // been revoked or expired. Checking only for a token let the interactive
+  // composer start with an unusable session; the first prompt then stalled in
+  // thread creation and every later prompt was queued behind it. Validate the
+  // user before entering the chat UI so stale sessions go through sign-in.
+  if (await auth.accessToken() && await auth.user()) return;
   console.log(color.cyan("You are not signed in. Sign in to Nexara to continue."));
   await login(config, auth, useGoogle, useQr);
 }
