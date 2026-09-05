@@ -773,6 +773,10 @@ function installEscapeExit() {
       // visible. Since process.exit skips the interactive cleanup finally
       // block, explicitly restore terminal mouse/cursor state before leaving.
       output.write("\r\n\u001b[?1006l\u001b[?1000l\u001b[?25h");
+      // process.exit also skips whatever would normally stop RunInBackground
+      // commands and subagents on exit -- left running, they hold ports and
+      // files that break the next `nexara` invocation in this workspace.
+      clearBackgroundProcesses();
       process.exit(0);
       return;
     }
@@ -982,6 +986,17 @@ function effectivePermissionMode(state) {
   return state.config.permissionMode || "ask";
 }
 
+// Tool output (file contents, command output, error text) is embedded in a
+// plain <tool_result> text wrapper the model is instructed to read as
+// structured output. It is not parsed as real XML, but a file or command
+// output containing the literal closing tag could still look like it ends
+// the tool result early, right before attacker- or accident-supplied text
+// that reads as a new instruction. Neutralize any embedded close tag so the
+// wrapper this call created is the only one that can close it.
+function escapeToolResultBody(text) {
+  return String(text ?? "").replace(/<\/tool_result>/gi, "<\\/tool_result>");
+}
+
 function toolRuleMatches(rule, name) {
   const pattern = String(rule || "").trim();
   const toolName = String(name || "");
@@ -1081,9 +1096,16 @@ async function runClientTool(state, call, signal) {
     return message;
   }
   const outsidePaths = toolPaths(name, args, state.cwd).filter((value) => value);
+  // Approvals are remembered per exact (tool, paths) combination -- not as a
+  // single session-wide switch -- so re-reading/re-running the SAME outside
+  // action doesn't re-prompt every turn, without silently widening access to
+  // a DIFFERENT outside path the user never actually approved.
+  const outsideActionKey = outsidePaths.length ? `${name}:${outsidePaths.join("|")}` : null;
+  const outsideAlreadyApproved = Boolean(outsideActionKey && state.approvedOutsideActions?.has(outsideActionKey));
   const outsideApprovalRequired = outsidePaths.length > 0
     && effectivePermissionMode(state) !== "full"
-    && !state.allowOutsidePaths;
+    && !state.allowOutsidePaths
+    && !outsideAlreadyApproved;
   if (decision.action === "ask" || outsideApprovalRequired) {
     const approved = await requestToolApproval(state, name, args, { outsidePaths });
     if (!approved) {
@@ -1091,9 +1113,9 @@ async function runClientTool(state, call, signal) {
       printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
       return message;
     }
-    if (outsideApprovalRequired && effectivePermissionMode(state) !== "sandboxed") {
+    if (outsideApprovalRequired && outsideActionKey && effectivePermissionMode(state) !== "sandboxed") {
       state.approvedOutsideActions ??= new Set();
-      state.approvedOutsideActions.add(`${name}:${outsidePaths.join("|")}`);
+      state.approvedOutsideActions.add(outsideActionKey);
     }
   }
   if (signal?.aborted) {
@@ -2275,6 +2297,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
   }
   await ensureThread(state, trimmed.replace(/\s+/g, " "));
   const conversation = [...state.messages, message];
+  // Alias state.messages to this same array now, not just on a clean finish.
+  // Every push onto `conversation` for the rest of this turn (assistant
+  // replies, tool results) updates state.messages too, so a cancellation,
+  // stream failure, or budget/turn-limit stop no longer drops the user's
+  // just-sent message (and anything that happened before the stop) from the
+  // live in-memory conversation the NEXT prompt in this session builds on --
+  // only the on-disk copy used to get that far via persistLocalSession below.
+  state.messages = conversation;
   await persistLocalSession(state, conversation);
   // 25 (the old default) is easily exhausted by a real multi-step task --
   // each file read/write/delete is its own turn, so a from-scratch rebuild
@@ -2372,6 +2402,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
         auth: state.auth,
         appUrl: state.config.appUrl,
         threadId: state.threadId,
+        cwd: state.cwd,
         messages: conversation,
         model: state.config.selectedModel,
         reasoningEffort: state.config.selectedReasoningEffort,
@@ -2558,10 +2589,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       const resultText = await runClientTool(state, call, controller.signal);
       (state.scheduleMountComposer || state.mountComposer)?.();
       outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
+      const safeResultText = escapeToolResultBody(resultText);
       conversation.push(userMessage(
         call.toolCallId
-          ? `<tool_result name="${call.name}" tool_call_id="${call.toolCallId}">\n${resultText}\n</tool_result>`
-          : `<tool_result name="${call.name}">\n${resultText}\n</tool_result>`,
+          ? `<tool_result name="${call.name}" tool_call_id="${call.toolCallId}">\n${safeResultText}\n</tool_result>`
+          : `<tool_result name="${call.name}">\n${safeResultText}\n</tool_result>`,
       ));
       await persistLocalSession(state, conversation);
     }
@@ -2754,6 +2786,7 @@ async function handleSlash(state, line) {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ threadId: state.threadId, model: state.config.selectedModel }),
+          signal: AbortSignal.timeout(120_000),
         });
         const data = await response.json().catch(() => null);
         if (!response.ok || !data?.summary) {

@@ -20,6 +20,20 @@ function clientFor(config) {
 
 const execFileAsync = promisify(execFile);
 
+// The Supabase JS client's auth calls take no AbortSignal, so a hung network
+// request here cannot be interrupted -- and accessToken() runs before EVERY
+// chat request, ahead of the AbortController that Ctrl+C is wired to. A stall
+// here previously froze the whole CLI with no way out, not even Ctrl+C. This
+// cannot cancel the underlying request, but it stops the CLI from waiting on
+// it forever and gives the caller a clear, actionable error instead.
+export function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(message), { code: "AUTH_TIMEOUT" })), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export function createAuth(config = loadConfig()) {
   let client;
   let session = config.session;
@@ -30,10 +44,14 @@ export function createAuth(config = loadConfig()) {
 
   async function restore() {
     if (!session?.access_token || !session?.refresh_token) return null;
-    const { data, error } = await getClient().auth.setSession({
-      access_token: session.access_token,
-      refresh_token: session.refresh_token,
-    });
+    const { data, error } = await withTimeout(
+      getClient().auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      }),
+      20_000,
+      "Nexara session restore timed out. Check your connection and try again.",
+    );
     if (error || !data.session) {
       session = null;
       clearSession();
@@ -57,20 +75,40 @@ export function createAuth(config = loadConfig()) {
     const callback = `${base}/auth#qr-callback=1`;
     const created = await fetch(`${base}/api/qr-auth?action=create&callback=${encodeURIComponent(callback)}`, {
       cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
     });
-    const challenge = await created.json();
+    let challenge;
+    try {
+      challenge = await created.json();
+    } catch {
+      throw new Error("Could not start QR sign-in: the server sent an unexpected response.");
+    }
     if (!created.ok) throw new Error(challenge.error || "Could not start QR sign-in.");
     onStatus({ type: "code", url: challenge.scanUrl, expiresAt: challenge.expiresAt });
     const started = Date.now();
     while (Date.now() - started < 125_000) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      const response = await fetch(`${base}/api/qr-auth?action=poll`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pollToken: challenge.pollToken }),
-        cache: "no-store",
-      });
-      const result = await response.json();
+      let response;
+      let result;
+      try {
+        response = await fetch(`${base}/api/qr-auth?action=poll`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pollToken: challenge.pollToken }),
+          cache: "no-store",
+          // Without this, one stuck poll request could block well past the
+          // outer 125s window -- the while condition is only checked BETWEEN
+          // iterations, not while a fetch is in flight.
+          signal: AbortSignal.timeout(10_000),
+        });
+        result = await response.json();
+      } catch {
+        // A single dropped/slow/non-JSON poll (proxy hiccup, transient 5xx)
+        // must not kill the whole sign-in attempt -- just try again next
+        // tick, same as an explicit "waiting" status.
+        onStatus({ type: "waiting" });
+        continue;
+      }
       if (result.status === "expired") throw new Error("QR sign-in expired. Please try again.");
       if (result.status !== "ready") {
         onStatus({ type: "waiting" });
@@ -228,7 +266,11 @@ export function createAuth(config = loadConfig()) {
     if (!session) return null;
     const restored = await restore();
     if (!restored) return null;
-    const { data, error } = await getClient().auth.refreshSession({ refresh_token: restored.refresh_token });
+    const { data, error } = await withTimeout(
+      getClient().auth.refreshSession({ refresh_token: restored.refresh_token }),
+      20_000,
+      "Nexara token refresh timed out. Check your connection and try again.",
+    );
     if (error || !data.session) return restored;
     session = data.session;
     saveConfig({ session });
@@ -243,7 +285,11 @@ export function createAuth(config = loadConfig()) {
   async function user() {
     const token = await accessToken();
     if (!token) return null;
-    const { data, error } = await getClient().auth.getUser(token);
+    const { data, error } = await withTimeout(
+      getClient().auth.getUser(token),
+      20_000,
+      "Nexara account lookup timed out. Check your connection and try again.",
+    );
     if (error) return null;
     return data.user ?? null;
   }

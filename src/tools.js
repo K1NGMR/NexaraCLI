@@ -20,7 +20,11 @@ const IGNORED_DIRECTORIES = new Set([
   ".turbo",
   "coverage",
 ]);
-const MAX_READ_BYTES = 1_500_000;
+// 1.5 MB (~375k tokens) was technically "capped" but could still overflow a
+// model's entire context window in a single tool result. Bounded to
+// something a turn can actually absorb alongside the rest of the
+// conversation.
+const MAX_READ_BYTES = 300_000;
 const MAX_SEARCH_FILES = 3_000;
 const MAX_SEARCH_MATCHES = 200;
 const MAX_COMMAND_OUTPUT = 30_000;
@@ -133,6 +137,7 @@ const ALLOWED_COMMANDS = new Set([
   "gradle",
   "java",
   "javac",
+  "ls",
   "mvn",
   "node",
   "npm",
@@ -349,9 +354,17 @@ function relativePath(filePath, cwd) {
   return relative ? relative.replaceAll(path.sep, "/") : ".";
 }
 
+const TRUNCATION_MARKER = "… earlier output truncated …\n";
+// Command/background output is accumulated incrementally (this runs again on
+// every new chunk). Keeping the HEAD meant that once a long build or dev
+// server crossed the cap, every later line -- including the final error or
+// "server started" message -- was silently dropped forever. Keep the TAIL
+// instead, and strip any marker already present so repeated calls don't pile
+// up multiple copies of it as output keeps growing.
 function truncate(value, max = MAX_COMMAND_OUTPUT) {
-  const text = String(value ?? "");
-  return text.length > max ? `${text.slice(0, max)}\n… output truncated …` : text;
+  let text = String(value ?? "");
+  if (text.startsWith(TRUNCATION_MARKER)) text = text.slice(TRUNCATION_MARKER.length);
+  return text.length > max ? `${TRUNCATION_MARKER}${text.slice(text.length - max)}` : text;
 }
 
 function globToRegExp(pattern) {
@@ -747,7 +760,10 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const filePath = pathArg("file_path", "path", "filepath", "file", "filename");
       const stat = await fs.stat(filePath);
       if (!stat.isFile()) throw new Error(`${filePath} is not a file.`);
-      if (stat.size > MAX_READ_BYTES) throw new Error(`${relativePath(filePath, cwd)} is larger than ${Math.round(MAX_READ_BYTES / 1024)} KB. Use ReadLines or a focused Search instead.`);
+      // "ReadLines" does not exist as a tool here -- pointing the model at it
+      // sent it into a retry loop calling something that could never work.
+      // Search and Bash (sed/tail/head are allowlisted) are real options.
+      if (stat.size > MAX_READ_BYTES) throw new Error(`${relativePath(filePath, cwd)} is larger than ${Math.round(MAX_READ_BYTES / 1024)} KB. Use Search to find the relevant section, or Bash with sed/tail/head to view a portion of the file.`);
       return await fs.readFile(filePath, "utf8");
     }
     case "Search": {

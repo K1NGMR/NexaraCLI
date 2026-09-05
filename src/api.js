@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 
 import { CLI_CLIENT_TOOL_NAMES } from "./tools.js";
+import { withTimeout } from "./auth.js";
 
 function id() {
   return crypto.randomUUID();
@@ -38,7 +39,8 @@ export async function createThread(auth, title = "New chat") {
     .from("threads")
     .insert({ user_id: user.id, title: title.slice(0, 80) || "New chat", origin: "cli" })
     .select("id, title, updated_at")
-    .single();
+    .single()
+    .abortSignal(AbortSignal.timeout(20_000));
   if (!error && data) return data;
   // The production database may not have the thread-origin column yet —
   // PostgREST reports it as 42703 (SQL) or PGRST204 (schema cache on INSERT).
@@ -49,7 +51,8 @@ export async function createThread(auth, title = "New chat") {
     .from("threads")
     .insert({ user_id: user.id, title: title.slice(0, 80) || "New chat" })
     .select("id, title, updated_at")
-    .single();
+    .single()
+    .abortSignal(AbortSignal.timeout(20_000));
   if (legacy.error || !legacy.data) throw new Error(legacy.error?.message || "Could not create a Nexara conversation.");
   return legacy.data;
 }
@@ -62,7 +65,8 @@ export async function listThreads(auth, limit = 20) {
     .select("id, title, updated_at, origin")
     .eq("origin", "cli")
     .order("updated_at", { ascending: false })
-    .limit(limit);
+    .limit(limit)
+    .abortSignal(AbortSignal.timeout(20_000));
   if (!error) return data ?? [];
   if (!(error?.code === "42703" || error?.code === "PGRST204") || !/origin/i.test(error.message || "")) {
     throw new Error(error.message);
@@ -71,7 +75,8 @@ export async function listThreads(auth, limit = 20) {
     .from("threads")
     .select("id, title, updated_at")
     .order("updated_at", { ascending: false })
-    .limit(limit);
+    .limit(limit)
+    .abortSignal(AbortSignal.timeout(20_000));
   if (legacy.error) throw new Error(legacy.error.message);
   return legacy.data ?? [];
 }
@@ -84,7 +89,8 @@ export async function loadThread(auth, threadId) {
     .select("id, title, updated_at, origin")
     .eq("id", threadId)
     .eq("origin", "cli")
-    .maybeSingle();
+    .maybeSingle()
+    .abortSignal(AbortSignal.timeout(20_000));
   let loadedThread = thread;
   if (threadError) {
     if (!(threadError?.code === "42703" || threadError?.code === "PGRST204") || !/origin/i.test(threadError.message || "")) {
@@ -94,7 +100,8 @@ export async function loadThread(auth, threadId) {
       .from("threads")
       .select("id, title, updated_at")
       .eq("id", threadId)
-      .maybeSingle();
+      .maybeSingle()
+      .abortSignal(AbortSignal.timeout(20_000));
     if (legacy.error) throw new Error(legacy.error.message);
     loadedThread = legacy.data;
   }
@@ -103,7 +110,8 @@ export async function loadThread(auth, threadId) {
     .from("messages")
     .select("id, role, parts, client_id, created_at")
     .eq("thread_id", threadId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    .abortSignal(AbortSignal.timeout(20_000));
   if (error) throw new Error(error.message);
   return {
     thread: loadedThread,
@@ -132,7 +140,16 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
   const line = raw.trim();
   if (!line || line.startsWith(":")) return;
   const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
-  if (!payload || payload === "[DONE]") return;
+  if (!payload) return;
+  if (payload === "[DONE]") {
+    // The classic OpenAI-style SSE terminator. This server's own stream
+    // normally finishes via an explicit "finish" event, but a gateway
+    // fallback or older stream variant ending with only [DONE] should still
+    // count as a complete response -- otherwise a perfectly good answer gets
+    // thrown away as STREAM_TERMINATED and retried/failed for no reason.
+    state.finished = true;
+    return;
+  }
 
   let event;
   try {
@@ -244,6 +261,7 @@ export async function sendChat({
   auth,
   appUrl,
   threadId,
+  cwd,
   messages,
   model,
   reasoningEffort,
@@ -282,8 +300,11 @@ export async function sendChat({
       "x-nexara-agent": "cli",
       // Local tools execute relative to this exact directory. Keep the model's
       // workspace context aligned with the client instead of making it infer a
-      // project layout from conversation history.
-      "x-nexara-cwd": process.cwd(),
+      // project layout from conversation history. Prefer the caller's tracked
+      // cwd (state.cwd) over process.cwd() -- /resume can point tool
+      // execution at a different saved-session workspace than the directory
+      // the process actually started in, and the two must not disagree.
+      "x-nexara-cwd": cwd || process.cwd(),
     },
     signal,
     body: JSON.stringify(body),
@@ -397,6 +418,7 @@ export async function transcribeAudio({ appUrl, token, filePath }) {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: form,
+    signal: AbortSignal.timeout(90_000),
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
