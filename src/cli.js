@@ -997,7 +997,16 @@ function printToolResult(name, result, { error = false, streamJson = false } = {
   // such as ListFiles look as if they returned only one result. Render every
   // returned line, wrapping long lines to the current terminal width.
   console.log(`  ${color.muted("┊")} ${label} ${color.muted(`${name} ${error ? "failed" : "done"}`)}`);
-  for (const line of lines) console.log(`       ${color.dim(line)}`);
+  // Edit's result appends a plain "-"/"+" prefixed diff (see diffBlock in
+  // tools.js) -- colored HERE, after wrapping, rather than at the source:
+  // wrapChatText wraps by raw character position, which would slice through
+  // an embedded ANSI escape sequence on a long line and corrupt the output.
+  const isDiffLine = name === "Edit" && !error;
+  for (const line of lines) {
+    if (isDiffLine && line.startsWith("- ")) console.log(`       ${color.red(line)}`);
+    else if (isDiffLine && line.startsWith("+ ")) console.log(`       ${color.green(line)}`);
+    else console.log(`       ${color.dim(line)}`);
+  }
 }
 
 function normalizeCliTodos(rawTodos) {

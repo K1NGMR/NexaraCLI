@@ -371,6 +371,23 @@ function relativePath(filePath, cwd) {
   return relative ? relative.replaceAll(path.sep, "/") : ".";
 }
 
+const MAX_DIFF_LINES = 40;
+// Plain "-"/"+" prefixed text, no ANSI codes -- this string is returned as
+// tool output (the model reads it too) and later passed through the CLI's
+// width-based line wrapper, which operates on raw byte/char positions and
+// would corrupt embedded escape sequences if it wrapped mid-code. The CLI
+// colors "-"/"+" lines itself, after wrapping, from this plain prefix.
+function diffBlock(oldText, newText) {
+  const oldLines = String(oldText).split(/\r?\n/);
+  const newLines = String(newText).split(/\r?\n/);
+  const lines = [...oldLines.map((line) => `- ${line}`), ...newLines.map((line) => `+ ${line}`)];
+  if (lines.length > MAX_DIFF_LINES) {
+    const half = Math.floor(MAX_DIFF_LINES / 2);
+    return [...lines.slice(0, half), `  … ${lines.length - MAX_DIFF_LINES} more lines …`, ...lines.slice(-half)].join("\n");
+  }
+  return lines.join("\n");
+}
+
 const TRUNCATION_MARKER = "… earlier output truncated …\n";
 // Command/background output is accumulated incrementally (this runs again on
 // every new chunk). Keeping the HEAD meant that once a long build or dev
@@ -875,7 +892,8 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       if (occurrences > 1 && args.replace_all !== true) throw new Error(`The requested text occurs ${occurrences} times. Add replace_all=true or provide a more specific old_string.`);
       const next = args.replace_all === true ? current.split(oldString).join(newString) : current.replace(oldString, newString);
       await fs.writeFile(filePath, next, "utf8");
-      return `Edited ${relativePath(filePath, cwd)} (${occurrences} replacement${occurrences === 1 ? "" : "s"}).`;
+      const summary = `Edited ${relativePath(filePath, cwd)} (${occurrences} replacement${occurrences === 1 ? "" : "s"}).`;
+      return `${summary}\n${diffBlock(oldString, newString)}`;
     }
     case "RenameSymbol": {
       const from = firstArg(args, "from", "symbol");
