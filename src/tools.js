@@ -508,7 +508,15 @@ function tokenizeCommand(command) {
   const source = String(command || "").trim();
   if (!source) throw new Error("Bash requires a command.");
   if (/[;&|<>`\n\r]/.test(source)) {
-    throw new Error("For safety, Bash accepts one command only and does not allow shell operators or redirection.");
+    // This is a blunt check -- it can't tell a real shell operator from the
+    // same character sitting inside quoted argument data (e.g. inserting
+    // literal HTML/SVG markup via sed, which is nothing but < and >
+    // characters). That means a task like "replace X with <svg>...</svg>"
+    // can NEVER succeed through Bash no matter how it's rephrased -- every
+    // phrasing hits this same wall, which previously left the model with no
+    // way to recover and no hint that it was even using the wrong tool.
+    // Point at the tool that actually handles file content changes.
+    throw new Error("For safety, Bash accepts one command only and does not allow shell operators or redirection (;&|<>`) -- this includes those characters inside quoted data, not just as real operators. Use Edit or Write to insert file content (including HTML/SVG/code containing these characters) instead of a shell command.");
   }
   const tokens = source.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+/g) || [];
   const unquote = (token) => token.replace(/^(['"])(.*)\1$/s, "$2").replace(/\\([\\"'])/g, "$1");

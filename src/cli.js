@@ -534,11 +534,30 @@ function activityText(status) {
   return ({
     waiting: "Processing shared Nexara context…",
     connecting: "Connecting to Nexara…",
-    thinking: "Thinking… (click to expand)",
+    thinking: "Thinking…",
     writing: "Writing response…",
     processing: "Processing shared context…",
     complete: "Done",
   })[status] || String(status || "Working…");
+}
+
+// The model's reasoning is buffered as it streams (see onReasoning below) but
+// was previously only ever shown as a static "(click to expand)" placeholder
+// during the turn -- the actual thought never appeared unless the user found
+// and pressed the toggle key. This renders a live, single-line tail of
+// whatever has streamed in so far, right in the activity line, with no
+// interaction required. Collapses whitespace/newlines to one line since the
+// activity line has exactly one row to work with; the full multi-line
+// reasoning is still available afterward via Thinking/toggleThinking.
+function thinkingPreviewLine(text, maxWidth) {
+  const flattened = String(text || "").replace(/\s+/g, " ").trim();
+  if (!flattened) return "Thinking…";
+  const prefix = "Thinking: ";
+  const budget = Math.max(8, maxWidth - visibleLength(prefix));
+  // Show the TAIL, not the head -- the most recent reasoning is what's
+  // actually in progress right now, same reason a log tail beats a log head.
+  const tail = flattened.length > budget ? `…${flattened.slice(-(budget - 1))}` : flattened;
+  return `${prefix}${tail}`;
 }
 
 function composerActivityLine(state) {
@@ -546,7 +565,8 @@ function composerActivityLine(state) {
   if (!status) return null;
   const frame = Number(state.composerActivityFrame || 0);
   if (status === "thinking") {
-    return `${color.amber(THINKING_FRAMES[frame % THINKING_FRAMES.length])} ${color.muted("Thinking — reasoning in progress")}`;
+    const preview = thinkingPreviewLine(state.thinkingText, Math.max(20, Math.min(60, terminalWidth() - 20)));
+    return `${color.amber(THINKING_FRAMES[frame % THINKING_FRAMES.length])} ${color.muted(preview)}`;
   }
   const label = status === "writing" ? "Writing response" : activityText(status);
   return `${color.coral(PROCESSING_FRAMES[frame % PROCESSING_FRAMES.length])} ${color.muted(label)}`;
@@ -574,7 +594,7 @@ function startComposerActivityAnimation(state) {
   };
 }
 
-function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, getCursorCol = () => 0, stableComposer = false, transcript = null } = {}) {
+function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, getCursorCol = () => 0, stableComposer = false, transcript = null, getThinkingPreview = null } = {}) {
   const startedAt = Date.now();
   let status = "waiting";
   let frame = 0;
@@ -582,6 +602,14 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
   let timer = null;
   const machine = (event) => {
     if (streamJson) process.stdout.write(`${JSON.stringify(event)}\n`);
+  };
+  // While reasoning is in progress, show a live tail of it instead of the
+  // static "Thinking…" label -- the whole point is to see the thought as it
+  // happens, not just know that thinking is happening. Falls back to the
+  // static label for any other status, or if the caller has no preview.
+  const activityLineText = (maxWidth) => {
+    if (status === "thinking" && getThinkingPreview) return thinkingPreviewLine(getThinkingPreview(), maxWidth);
+    return activityText(status);
   };
   // Moving up `offset` rows to redraw the activity line, then back down
   // `offset` rows, only restores the ROW -- cursor-down keeps whatever
@@ -601,7 +629,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     // Preferred path: a reserved transcript row, painted in place at an
     // absolute address, so the live status sits where the answer will land.
     if (transcript?.begin?.()) {
-      const inline = `  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`;
+      const inline = `  ${paint(glyph)} ${color.muted(activityLineText(Math.max(20, terminalWidth() - 10)))} ${color.dim(`${seconds}s`)}`;
       if (transcript.paint?.(inline)) {
         visible = true;
         return;
@@ -612,7 +640,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     // without a reserved row keep the state in the fixed footer instead.
     if (stableComposer) return;
     visible = true;
-    const line = `\r\u001b[2K  ${paint(glyph)} ${color.muted(activityText(status))} ${color.dim(`${seconds}s`)}`;
+    const line = `\r\u001b[2K  ${paint(glyph)} ${color.muted(activityLineText(Math.max(20, terminalWidth() - 10)))} ${color.dim(`${seconds}s`)}`;
     const offset = Math.max(0, Number(getCursorOffset()) || 0);
     if (offset) output.write(`\u001b[${offset}A${line}\u001b[${offset}B${restoreCol()}`);
     else output.write(line);
@@ -1402,15 +1430,24 @@ function userTurnLine(text) {
   return `${color.coral("›")} ${color.cream(text)}`;
 }
 
+// Blank rows printed BEFORE the "You" line, so a new prompt never visually
+// runs into the end of the previous assistant response above it -- kept as
+// one constant so userTurnRows() (which prepareTranscript() uses to reserve
+// exactly the right number of rows) can never drift out of sync with what
+// printUserTurn() actually writes.
+const USER_TURN_LEADING_GAP_ROWS = 2;
+
 function userTurnRows(text, files = []) {
-  // timestamp row + wrapped body rows + optional attachment row + the single
-  // blank separator printed below. Kept in one place so prepareTranscript()
-  // reserves exactly what printUserTurn() writes -- over-reserving is what
-  // produced the empty gap between a submitted message and its response.
-  return 1 + wrapChatText(text).length + (files.length ? 1 : 0) + 1;
+  // leading gap rows + timestamp row + wrapped body rows + optional
+  // attachment row + the single blank separator printed below. Kept in one
+  // place so prepareTranscript() reserves exactly what printUserTurn()
+  // writes -- a mismatch here is what previously produced either a stale
+  // gap or corrupted redraw between a submitted message and its response.
+  return USER_TURN_LEADING_GAP_ROWS + 1 + wrapChatText(text).length + (files.length ? 1 : 0) + 1;
 }
 
 function printUserTurn(text, files = [], timestamp = null) {
+  for (let i = 0; i < USER_TURN_LEADING_GAP_ROWS; i += 1) console.log();
   const stamp = timestamp
     ? new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -2429,6 +2466,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
         paint: (line) => Boolean(state.paintTranscriptActivity?.(line)),
         end: () => state.endTranscriptActivity?.(),
       },
+      // Always show a live tail of the actual reasoning instead of a static
+      // "(click to expand)" placeholder -- the activity line already redraws
+      // on its own 120ms timer, so this alone makes thinking visible as it
+      // happens with no key/click required.
+      getThinkingPreview: () => state.thinkingText,
     });
     state.thinkingText = "";
     state.thinkingExpanded = false;
@@ -2626,9 +2668,19 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     for (const artifact of serverArtifacts) {
       const saved = await saveServerArtifact(state, artifact.name, artifact.output).catch(() => null);
       if (saved) {
-        const messageText = `Saved ${artifact.name} output to ${path.relative(state.cwd, saved) || saved}.`;
+        const relativePath = path.relative(state.cwd, saved) || saved;
+        const messageText = `Saved ${artifact.name} output to ${relativePath}.`;
         if (!quiet) notice(messageText);
         outputToolEvent(state, { type: "artifact", name: artifact.name, path: saved });
+        // The model only sees create_image/create_pdf's raw output (a data
+        // URL) in the same turn it called the tool -- it has no way to know
+        // the LOCAL file path this just got saved to, so referencing it from
+        // HTML/files it writes afterward (e.g. <img src="...">) would be a
+        // guess. Tell it explicitly, the same way a tool result would.
+        conversation.push(userMessage(
+          `<saved_artifact name="${artifact.name}" path="${relativePath}">\nThis was just saved to ${relativePath} (relative to the project root). Reference it by this exact path in any file you write.\n</saved_artifact>`,
+        ));
+        await persistLocalSession(state, conversation);
       }
     }
     if (!quiet && assistant.sources?.length) {
