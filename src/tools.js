@@ -524,6 +524,24 @@ function spawnPossiblyBatch(executable, args, options) {
   return spawn(executable, args, { ...options, shell: false });
 }
 
+// child.kill() only signals the direct child. On Windows that is routinely
+// not the actual work: npm/npx/yarn/tsc/etc. are .cmd wrappers, so the real
+// process is a grandchild of cmd.exe, and build tools commonly spawn further
+// children of their own -- none of which Windows tears down just because
+// their parent died (no process-group semantics like POSIX SIGKILL-to-group).
+// A timed-out or cancelled command left those running: a dev server still
+// holding its port, a compiler still holding a file lock, silently breaking
+// the NEXT command that needed the same port/file.
+function killProcessTree(child) {
+  if (!child || child.killed || child.exitCode !== null) return;
+  if (process.platform === "win32" && child.pid) {
+    spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
+      .once("error", () => child.kill());
+    return;
+  }
+  child.kill();
+}
+
 async function runCommand(command, cwd, { background = false, allowOutside = false, signal } = {}) {
   const tokens = tokenizeCommand(command);
   const outsidePaths = toolPaths("Bash", { command }, cwd);
@@ -571,12 +589,12 @@ async function runCommand(command, cwd, { background = false, allowOutside = fal
     let stderr = "";
     let cancelled = false;
     const timer = setTimeout(() => {
-      child.kill();
+      killProcessTree(child);
       resolve({ exitCode: -1, stdout, stderr: `${stderr}\nCommand timed out after 120 seconds.` });
     }, 120_000);
     const onAbort = () => {
       cancelled = true;
-      child.kill();
+      killProcessTree(child);
     };
     signal?.addEventListener("abort", onAbort);
     const cleanup = () => {
@@ -653,11 +671,11 @@ async function applyUnifiedDiff(filePath, patch, cwd, { signal } = {}) {
     // neither a timeout nor a cancellation path.
     const timer = setTimeout(() => {
       cancelled = true;
-      child.kill();
+      killProcessTree(child);
     }, 120_000);
     const onAbort = () => {
       cancelled = true;
-      child.kill();
+      killProcessTree(child);
     };
     signal?.addEventListener("abort", onAbort);
     const cleanup = () => {
@@ -941,7 +959,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const id = firstArg(args, "id");
       const entry = localAgents.get(id);
       if (!entry) throw new Error(`Unknown subagent: ${id}`);
-      if (entry.status === "running") entry.child.kill();
+      if (entry.status === "running") killProcessTree(entry.child);
       entry.status = "stopped";
       entry.finishedAt = Date.now();
       return `Stopped subagent ${id}.`;
@@ -972,7 +990,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const id = firstArg(args, "id");
       const entry = backgroundProcesses.get(id);
       if (!entry) throw new Error(`Unknown background process: ${id}`);
-      entry.child.kill();
+      killProcessTree(entry.child);
       return `Stopped background process ${id}.`;
     }
     case "CheckPort":
@@ -1181,11 +1199,11 @@ export function backgroundSummary() {
 
 export function clearBackgroundProcesses() {
   for (const entry of backgroundProcesses.values()) {
-    if (entry.exitCode === undefined) entry.child.kill();
+    if (entry.exitCode === undefined) killProcessTree(entry.child);
   }
   backgroundProcesses.clear();
   for (const entry of localAgents.values()) {
-    if (entry.status === "running") entry.child.kill();
+    if (entry.status === "running") killProcessTree(entry.child);
   }
   localAgents.clear();
 }

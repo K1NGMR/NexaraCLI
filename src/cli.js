@@ -33,6 +33,12 @@ import {
 // Keep base64-encoded request bodies below common serverless request limits.
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
+// The per-file caps above bound one attachment, but nothing bounded how many
+// of them could ride in the same request -- several max-size attachments
+// together could still blow well past a serverless request-body limit, and
+// the whole chat request would fail with no clear explanation why.
+const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENTS = 8;
 const IMAGE_TYPES = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -2155,7 +2161,17 @@ async function readAttachment(filePath) {
     throw new Error(`${filePath} is larger than ${Math.round(maxBytes / 1024 / 1024)} MB.`);
   }
   const data = await fs.readFile(resolved);
-  return { filename: path.basename(resolved), mediaType, dataUrl: `data:${mediaType};base64,${data.toString("base64")}` };
+  return { filename: path.basename(resolved), mediaType, bytes: stat.size, dataUrl: `data:${mediaType};base64,${data.toString("base64")}` };
+}
+
+function checkAttachmentBudget(files) {
+  if (files.length > MAX_ATTACHMENTS) {
+    throw new Error(`Too many attachments (${files.length}). Send at most ${MAX_ATTACHMENTS} per message.`);
+  }
+  const totalBytes = files.reduce((sum, file) => sum + (file.bytes || 0), 0);
+  if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+    throw new Error(`Attachments total ${Math.round(totalBytes / 1024 / 1024)} MB, over the ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB combined limit per message. Remove one or send them in separate messages.`);
+  }
 }
 
 async function requireLogin(auth, config) {
@@ -2703,6 +2719,7 @@ async function handleSlash(state, line) {
         return true;
       }
       const file = await readAttachment(argument);
+      checkAttachmentBudget([...state.pendingImages, file]);
       state.pendingImages.push(file);
       notice(`Attached ${color.cream(file.filename)} · it will be sent with your next prompt.`);
       return true;
@@ -3662,10 +3679,29 @@ async function interactive(config, auth, configPath, existingState) {
   }
 }
 
+// A pipe with no natural end (a log tail, an endless producer) or just a
+// very large file previously grew this string with no bound at all, risking
+// unbounded memory growth before the request was even built -- and a prompt
+// that large could never fit a model's context anyway.
+const MAX_PIPED_INPUT_BYTES = 4_000_000;
 async function readPipedInput() {
   let value = "";
-  for await (const chunk of process.stdin) value += chunk;
-  return value.trim();
+  let truncated = false;
+  for await (const chunk of process.stdin) {
+    value += chunk;
+    if (value.length > MAX_PIPED_INPUT_BYTES) {
+      value = value.slice(0, MAX_PIPED_INPUT_BYTES);
+      truncated = true;
+      // A producer with no natural end (e.g. `yes | nexara -p ...`) would
+      // otherwise keep this loop awaiting the next chunk forever even after
+      // accumulation stops -- stop consuming stdin entirely instead.
+      break;
+    }
+  }
+  const trimmed = value.trim();
+  return truncated
+    ? `${trimmed}\n\n… input truncated at ${Math.round(MAX_PIPED_INPUT_BYTES / 1_000_000)} MB …`
+    : trimmed;
 }
 
 async function oneShot(config, auth, options, configPath) {
@@ -3675,6 +3711,7 @@ async function oneShot(config, auth, options, configPath) {
   const prompt = instruction && piped ? `${instruction}\n\nInput:\n${piped}` : instruction || piped;
   if (!prompt) throw new Error("Provide a prompt, e.g. `nexara -p \"Summarize this\"`, or pipe input.");
   const images = await Promise.all(options.images.map(readImage));
+  checkAttachmentBudget(images);
   const state = {
     config: {
       ...config,
