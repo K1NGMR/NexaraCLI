@@ -518,19 +518,6 @@ const color = {
   terminalWhite: rgb(250, 249, 245),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
-// The CLI uses a small, typography-first petal mark. A multi-line pixel
-// raster consumes valuable terminal height and looked broken at non-default
-// font sizes; this stays crisp in every ANSI-capable terminal.
-const PETAL_MARK_FRAMES = ["✦", "✧", "✦", "·"];
-const NEXARA_CLI_LOGO = [
-  "███╗  ██╗ ███████╗ ██╗  ██╗  █████╗  ██████╗   █████╗       ██████╗ ██╗      ██╗",
-  "████╗ ██║ ██╔════╝ ╚██╗██╔╝ ██╔══██╗ ██╔══██╗ ██╔══██╗     ██╔════╝ ██║      ██║",
-  "██╔██╗██║ █████╗    ╚███╔╝  ███████║ ██████╔╝ ███████║     ██║      ██║      ██║",
-  "██║╚████║ ██╔══╝    ██╔██╗  ██╔══██║ ██╔══██╗ ██╔══██║     ██║      ██║      ██║",
-  "██║ ╚███║ ███████╗ ██╔╝ ██╗ ██║  ██║ ██║  ██║ ██║  ██║     ╚██████╗ ███████╗ ██║",
-  "╚═╝  ╚══╝ ╚══════╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝      ╚═════╝ ╚══════╝ ╚═╝",
-];
-
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
 const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
@@ -1204,29 +1191,8 @@ async function saveServerArtifact(state, name, output) {
   return filePath;
 }
 
-function petalMark(frameIndex = 0) {
-  const glyph = PETAL_MARK_FRAMES[frameIndex % PETAL_MARK_FRAMES.length];
-  return color.coral(glyph);
-}
-
-function nexaraWordmark(frameIndex = 0) {
-  return `${petalMark(frameIndex)} ${color.cream("Nexara")}`;
-}
-
 function pause(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function animateMascot(label = "Starting Nexara") {
-  if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ANIMATION === "1") {
-    return;
-  }
-  output.write("\u001b[?25l");
-  for (let index = 0; index < PETAL_MARK_FRAMES.length * 2; index += 1) {
-    output.write(`\r\u001b[2K  ${nexaraWordmark(index)} ${color.muted(label)}`);
-    await pause(75);
-  }
-  output.write("\r\u001b[2K\u001b[?25h");
 }
 
 async function animateText(text, paint = color.muted) {
@@ -3974,7 +3940,6 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === "whoami" && options.prompt.length === 1) { const user = await auth.user(); console.log(user?.email || "Not signed in."); return; }
   const startsInteractive = !(options.print || options.prompt.length > 0 || options.images.length > 0 || (options.continue && options.prompt.length > 0));
   if (startsInteractive || (command === "login" && options.prompt.length === 1)) clearTerminalForSession();
-  if (startsInteractive) await animateMascot();
   if (!startsInteractive) {
     await ensureSignedIn(nextConfig, auth, options.google, options.qr);
     await oneShot(nextConfig, auth, { ...options, prompt: options.prompt[0] === "login" ? [] : options.prompt }, configPath);
