@@ -57,6 +57,32 @@ test("a question stashes and restores an in-progress draft instead of losing it"
   assert.equal(editor.line, "draft", "the original draft must come back after the question settles");
 });
 
+test("pause('muted') keeps accepting keystrokes but silences redraws until resume()", () => {
+  const { input, output } = fakeStreams();
+  let writes = 0;
+  output.write = () => { writes += 1; return true; };
+  const editor = createTerminalEditor({ input, output });
+  press(input, "h");
+  press(input, "i");
+  assert.equal(editor.line, "hi");
+
+  editor.pause("muted");
+  writes = 0;
+  press(input, "x");
+  press(input, "y");
+  assert.equal(editor.line, "hixy", "muted keystrokes must still update the buffer, unlike a blocked pause");
+  assert.equal(writes, 0, "no redraw should reach the terminal while muted");
+
+  writes = 0;
+  editor.resume();
+  assert.ok(writes > 0, "resume() must repaint once to catch up on everything typed while muted");
+
+  writes = 0;
+  press(input, "!");
+  assert.equal(editor.line, "hixy!");
+  assert.ok(writes > 0, "typing after resume() redraws normally again");
+});
+
 test("submitting a normal line emits 'line' and clears the buffer", () => {
   const { input, output } = fakeStreams();
   const editor = createTerminalEditor({ input, output });

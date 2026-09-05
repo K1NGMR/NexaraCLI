@@ -28,13 +28,35 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   // selected a picker option, and typing a picker's own hotkeys (letters,
   // numpad digits) could repaint/edit the composer underneath it. Callers
   // must pause() before opening a modal and resume() once it settles.
-  let suspended = false;
+  //
+  // Two distinct pause reasons need different behavior, so this is a mode,
+  // not a boolean:
+  //  - "blocked" (modal pickers): keystrokes are fully ignored -- the picker
+  //    owns the keyboard, nothing here should mutate.
+  //  - "muted" (a response is actively streaming/printing into the
+  //    transcript): the composer still owns the keyboard -- the user can
+  //    keep typing/queue their next message while the AI is working, an
+  //    existing feature (pendingMessages) -- so keystrokes still update
+  //    line/cursor normally. Only the actual screen REDRAW is suppressed.
+  //    render() uses relative cursor movement with no absolute position of
+  //    its own; the transcript printer moves the real cursor around via
+  //    absolute addressing while a long response streams, so a redraw
+  //    landing in that window used stale relative math and drew into
+  //    whatever row the cursor actually was on (letters/fragments of the
+  //    composer bleeding into the transcript, or the reverse). Muting the
+  //    redraw during that window and forcing one resync render() on resume()
+  //    means typed input is never lost, just not visibly updated for that
+  //    brief stretch.
+  let inputMode = "active";
 
   const editor = {
     get line() { return line; },
     get closed() { return closed; },
-    pause() { suspended = true; },
-    resume() { suspended = false; },
+    pause(mode = "blocked") { inputMode = mode; },
+    resume() {
+      inputMode = "active";
+      render();
+    },
     getCursorPos() { return { cols: currentPrompt.length + cursor, rows: 0 }; },
     setPrompt(value) {
       // Strip styling from the prompt and retain the visible glyphs only.
@@ -93,7 +115,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   }
 
   function render() {
-    if (closed) return;
+    if (closed || inputMode === "muted") return;
     const columns = Math.max(24, Number(width()) || 80);
     const available = Math.max(1, columns - currentPrompt.length - 3);
     const maxRows = Math.max(1, Number(rows()) || 3);
@@ -163,7 +185,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   }
 
   function onKeypress(str, key = {}) {
-    if (closed || suspended) return;
+    if (closed || inputMode === "blocked") return;
     const name = String(key.name || "").toLowerCase();
     const sequence = key.sequence || str || "";
     if (key.ctrl && name === "c") return;

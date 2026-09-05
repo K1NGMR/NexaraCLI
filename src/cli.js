@@ -2416,6 +2416,15 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     // usable, so a second line can be queued without disturbing the stream.
     state.mountComposer?.();
   }
+  // Muted (not blocked) for the rest of this turn's work: the transcript is
+  // about to move the real cursor around with absolute addressing while
+  // streaming/printing, which the composer's own relative-cursor render()
+  // cannot account for -- a keystroke landing mid-print used stale math and
+  // corrupted the transcript. Typing is still accepted and queued as normal
+  // (see pendingMessages); only the composer's own redraw is silenced until
+  // this turn's work is done, at which point one real render() catches it up.
+  state.muteComposerRedraw?.();
+  try {
   // Thread/auth setup happens before the stream activity line exists. Keep
   // the fixed footer honest during that phase; otherwise a slow or failed
   // session request looks like a dead composer after the user submits.
@@ -2831,6 +2840,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     process.stdout.write(`${JSON.stringify({ text: lastAssistant.text, model: lastAssistant.model || state.config.selectedModel, usage: lastAssistant.usage, threadId: state.threadId })}\n`);
   }
   return lastAssistant;
+  } finally {
+    state.unmuteComposerRedraw?.();
+  }
 }
 
 async function continueGoal(state, goal) {
@@ -3215,6 +3227,20 @@ async function interactive(config, auth, configPath, existingState) {
     }
   };
   state.withEditorPaused = withEditorPaused;
+  // While a response streams/prints, the transcript moves the real cursor
+  // with absolute VT100 addressing; the composer's own render() only knows
+  // relative movement, so a redraw racing that window drew into whatever
+  // row the cursor actually landed on and corrupted the transcript. Typing
+  // must still work (queued messages while the AI is busy are a supported
+  // feature), so this only silences the composer's redraw -- not the
+  // keystrokes -- for that window, then repaints once when it ends.
+  // Only the fixed-composer TUI (terminal-editor.js) has this race -- the
+  // plain readline fallback used for non-TTY/simple sessions has no
+  // absolute-cursor transcript writes to collide with, and readline's own
+  // pause() genuinely stops reading stdin (no "muted" concept), which would
+  // wrongly kill its already-working type-ahead-while-busy behavior.
+  state.muteComposerRedraw = () => { if (fixedComposer) rl.pause?.("muted"); };
+  state.unmuteComposerRedraw = () => { if (fixedComposer) rl.resume?.(); };
   let questionActive = false;
   const askInComposer = async (message, options) => {
     questionActive = true;
