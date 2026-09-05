@@ -2224,6 +2224,10 @@ async function ensureSignedIn(config, auth, useGoogle = false, useQr = false) {
   await login(config, auth, useGoogle, useQr);
 }
 
+function currentAccountId(config) {
+  return config?.session?.user?.id || config?.session?.user?.email || null;
+}
+
 async function persistLocalSession(state, messages = state.messages) {
   if (state.config.noSessionPersistence || !state.threadId) return null;
   return saveLocalSession({
@@ -2233,6 +2237,7 @@ async function persistLocalSession(state, messages = state.messages) {
     model: state.config.selectedModel,
     reasoningEffort: state.config.selectedReasoningEffort,
     createdAt: state.sessionCreatedAt,
+    accountId: currentAccountId(state.config),
     messages,
   }).catch(() => null);
 }
@@ -2247,8 +2252,8 @@ async function ensureThread(state, title = "New chat") {
   if (!state.config.noSessionPersistence) state.config = { ...state.config, ...saveConfig({ lastThreadId: thread.id }) };
 }
 
-async function loadSavedThread(auth, threadId) {
-  const local = await loadLocalSession(threadId);
+async function loadSavedThread(auth, threadId, accountId = null) {
+  const local = await loadLocalSession(threadId, accountId);
   if (local) {
     return {
       local: true,
@@ -2772,7 +2777,7 @@ async function handleSlash(state, line) {
     case "/resume": {
       const id = argument || state.config.lastThreadId;
       if (!id) { console.log("No saved conversation to resume."); return true; }
-      const loaded = await loadSavedThread(state.auth, id);
+      const loaded = await loadSavedThread(state.auth, id, currentAccountId(state.config));
       state.threadId = loaded.thread.id;
       state.messages = loaded.messages;
       state.sessionTitle = loaded.thread.title || "New chat";
@@ -2791,7 +2796,7 @@ async function handleSlash(state, line) {
       return true;
     }
     case "/threads": {
-      const local = state.config.noSessionPersistence ? [] : await listLocalSessions();
+      const local = state.config.noSessionPersistence ? [] : await listLocalSessions(50, currentAccountId(state.config));
       let remote = [];
       try {
         remote = await listThreads(state.auth);
@@ -3779,7 +3784,7 @@ async function oneShot(config, auth, options, configPath) {
   if (options.continue) {
     const id = config.lastThreadId;
     if (!id) throw new Error("No previous thread to continue.");
-    const loaded = await loadSavedThread(auth, id);
+    const loaded = await loadSavedThread(auth, id, currentAccountId(config));
     state.threadId = loaded.thread.id;
     state.messages = loaded.messages;
     state.sessionTitle = loaded.thread.title || "New chat";
@@ -3874,7 +3879,7 @@ export async function main(argv = process.argv.slice(2)) {
     const state = { config: nextConfig, auth, configPath, threadId: null, messages: [], sessionTitle: null, sessionCreatedAt: null, pendingImages: [], quiet: false };
     const id = nextConfig.lastThreadId;
     if (!id) throw new Error("No previous thread to continue.");
-    const loaded = await loadSavedThread(auth, id);
+    const loaded = await loadSavedThread(auth, id, currentAccountId(nextConfig));
     state.threadId = loaded.thread.id;
     state.messages = loaded.messages;
     state.sessionTitle = loaded.thread.title || "New chat";
