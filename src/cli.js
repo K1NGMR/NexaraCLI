@@ -997,11 +997,15 @@ function isToolConfigured(state, name) {
   return true;
 }
 
-function toolAccessDecision(state, name) {
+export function toolAccessDecision(state, name) {
   if (!isToolConfigured(state, name)) return { action: "deny", reason: "blocked by disallowed-tools" };
+  // Non-mutating tools (Read, List, Search, Glob, ...) must clear before the
+  // read-only/plan gate below -- otherwise those modes deny every tool,
+  // including safe reads, which defeats their entire purpose (investigate
+  // without being able to change anything).
+  if (!isMutatingTool(name)) return { action: "allow" };
   const mode = effectivePermissionMode(state);
   if (mode === "read-only" || mode === "plan") return { action: "deny", reason: permissionModeLabel(mode) };
-  if (!isMutatingTool(name)) return { action: "allow" };
   if (Array.isArray(state.config.allowedTools) && state.config.allowedTools.some((rule) => toolRuleMatches(rule, name))) return { action: "allow" };
   if (toolAllowedByMode(name, mode)) return { action: "allow" };
   return { action: "ask" };
@@ -1066,7 +1070,7 @@ async function requestToolApproval(state, name, args, { outsidePaths = [] } = {}
   return answer === "y" || answer === "yes";
 }
 
-async function runClientTool(state, call) {
+async function runClientTool(state, call, signal) {
   const name = String(call?.name || "");
   const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
   if (name === "ask_question") return askTerminalQuestion(state, args);
@@ -1092,8 +1096,13 @@ async function runClientTool(state, call) {
       state.approvedOutsideActions.add(`${name}:${outsidePaths.join("|")}`);
     }
   }
+  if (signal?.aborted) {
+    const message = `Tool ${name} was cancelled before it started.`;
+    printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
+    return message;
+  }
   try {
-    const result = await executeCliTool(name, args, { cwd: state.cwd, allowOutside: outsidePaths.length > 0 });
+    const result = await executeCliTool(name, args, { cwd: state.cwd, allowOutside: outsidePaths.length > 0, signal });
     if (name === "TodoWrite") {
       state.todos = applyCliTodoUpdate(state.todos, args.todos, args.mode);
       if (state.outputFormat !== "stream-json") printTodoList(state.todos);
@@ -2422,28 +2431,45 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
         const messageText = "Generation cancelled.";
         if (!quiet) composerNotice(state, messageText, "amber");
         outputToolEvent(state, { type: "cancelled", message: messageText });
+        if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
         return null;
       }
       if (error?.code === "STREAM_TERMINATED") {
         const messageText = error.message || "The response connection was terminated before the model finished. Please try again.";
         if (!quiet) composerNotice(state, messageText, "red");
         outputToolEvent(state, { type: "error", code: error.code, message: messageText });
+        if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
         return null;
       }
+      if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
       throw error;
     } finally {
       stopComposerAnimation();
-      if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
+      // state.cancelCurrent stays pointed at this turn's controller past this
+      // point (see below) so Ctrl+C can still reach an executing local tool
+      // -- restoring it here unconditionally ran it back to the PREVIOUS
+      // cancel handler before runClientTool ever started, leaving Ctrl+C
+      // with nothing to abort while a tool (e.g. a long Bash command) ran.
       state.toggleThinking = null;
       state.setThinkingMouse?.(false);
     }
     activity.clear();
     state.clearComposer?.();
     lastAssistant = assistant;
-    const responseText = assistant.text || streamedText;
-    if (responseText && !assistant.text) {
+    // streamedText accumulates every delta received across the whole turn,
+    // including any reconnect retries (see onRetry above); assistant.text is
+    // only the LAST attempt's own text, so after a reconnect it holds just
+    // the continuation suffix. Preferring it here silently dropped the
+    // answer's prefix from what got rendered and saved.
+    const responseText = streamedText || assistant.text;
+    if (responseText && responseText !== assistant.text) {
+      // Reconcile the full accumulated answer (prefix + any reconnect
+      // continuation) back onto the assistant message so persisted history
+      // and later context sent back to the model match what the user saw --
+      // not just the last attempt's own (possibly partial) text.
       assistant.text = responseText;
-      assistant.parts = [{ type: "text", text: responseText }];
+      const reasoningPart = assistant.parts?.find((part) => part.type === "reasoning");
+      assistant.parts = [...(reasoningPart ? [reasoningPart] : []), { type: "text", text: responseText }];
     }
     if ((responseText.trim() || String(state.thinkingText || "").trim()) && state.outputFormat !== "json" && !machine) {
       const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: false }));
@@ -2473,23 +2499,29 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     if (!quiet && assistant.sources?.length) {
       console.log(`  ${color.muted("Sources")} ${assistant.sources.map((source) => color.cyan(typeof source === "string" ? source : source.url || source.title || "source")).join(color.muted(" · "))}`);
     }
-    const call = assistant.nativeCall;
+    // A single assistant step can request more than one client tool at once
+    // (e.g. two parallel Reads); api.js surfaces all of them in nativeCalls.
+    // nativeCall (singular) stays as a fallback for anything constructing an
+    // assistant message by hand without the array.
+    const calls = assistant.nativeCalls?.length ? assistant.nativeCalls : (assistant.nativeCall ? [assistant.nativeCall] : []);
+    const runnableCalls = calls.filter((entry) => CLI_LOCAL_TOOL_NAMES.has(entry.name) || entry.name === "ask_question");
     // Some provider streams close with an empty assistant payload. Do not
     // silently return the user to the prompt: retry the same continuation a
     // small, bounded number of times, preserving any tool result in context.
-    if (!call && !responseText.trim() && emptyContinuationRetries < 2) {
+    if (!calls.length && !responseText.trim() && emptyContinuationRetries < 2) {
       emptyContinuationRetries += 1;
       if (!quiet) composerNotice(state, `The model returned an empty continuation. Retrying (${emptyContinuationRetries}/2)…`, "amber");
+      if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
       // A transport/provider retry must not consume one of the user's agent
       // turns. The for-loop increment would otherwise make maxTurns=1 exit
       // before the retry ever runs.
       turn -= 1;
       continue;
     }
-    if (!call && !responseText.trim() && !quiet) {
+    if (!calls.length && !responseText.trim() && !quiet) {
       composerNotice(state, "The model returned no response after 3 attempts. Please try again or switch models with /model.", "red");
     }
-    if (!call || !CLI_LOCAL_TOOL_NAMES.has(call.name) && call.name !== "ask_question") {
+    if (!runnableCalls.length) {
       // Printed only here, where the agent loop actually ends, rather than
       // after every intermediate turn -- a turn that reads a file and keeps
       // going still has more tool calls queued, so marking it "Completed"
@@ -2503,6 +2535,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
         state.prepareTranscript?.(1);
         printTurnComplete(turnStartedAt);
       }
+      if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
       conversation.push(assistant);
       await persistLocalSession(state, conversation);
       break;
@@ -2517,24 +2550,38 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     // etc.) printed anything, so the NEXT real clear erased the wrong
     // number of rows -- this is what made the rule/status line vanish
     // specifically while a tool was running.
-    state.clearComposer?.();
-    const resultText = await runClientTool(state, call);
-    (state.scheduleMountComposer || state.mountComposer)?.();
+    // Calls run sequentially (not concurrently): parallel Edits/Writes to
+    // overlapping files or Bash commands sharing state are not safe to race,
+    // and the model reads each result in the order it will see them anyway.
+    for (const call of runnableCalls) {
+      state.clearComposer?.();
+      const resultText = await runClientTool(state, call, controller.signal);
+      (state.scheduleMountComposer || state.mountComposer)?.();
+      outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
+      conversation.push(userMessage(
+        call.toolCallId
+          ? `<tool_result name="${call.name}" tool_call_id="${call.toolCallId}">\n${resultText}\n</tool_result>`
+          : `<tool_result name="${call.name}">\n${resultText}\n</tool_result>`,
+      ));
+      await persistLocalSession(state, conversation);
+    }
+    // The tool phase is over -- restore whatever Ctrl+C should cancel next
+    // (a prior turn's controller, or nothing) now that this turn's is done.
+    if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
     emptyContinuationRetries = 0;
-    outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
-    conversation.push(userMessage(`<tool_result name="${call.name}">\n${resultText}\n</tool_result>`));
-    await persistLocalSession(state, conversation);
     if (state.outputFormat === "json") continue;
   }
   if (!lastAssistant) return null;
-  if (lastAssistant.nativeCall) {
+  const pendingCalls = lastAssistant.nativeCalls?.length ? lastAssistant.nativeCalls : (lastAssistant.nativeCall ? [lastAssistant.nativeCall] : []);
+  if (pendingCalls.length) {
     // "Raise --max-turns" is a startup flag -- useless advice mid-REPL, since
     // the thread already persisted the pending call and just needs another
     // message to pick back up.
     const continueHint = state.interactive
       ? "Send another message (e.g. \"continue\") to keep going."
       : "Raise --max-turns to continue.";
-    const messageText = `Paused after ${maxTurns} model turn${maxTurns === 1 ? "" : "s"} with ${lastAssistant.nativeCall.name} still pending. ${continueHint}`;
+    const pendingNames = pendingCalls.map((entry) => entry.name).join(", ");
+    const messageText = `Paused after ${maxTurns} model turn${maxTurns === 1 ? "" : "s"} with ${pendingNames} still pending. ${continueHint}`;
     if (!quiet) notice(messageText, "amber");
     outputToolEvent(state, { type: "turn-limit", message: messageText });
   }
@@ -3616,7 +3663,7 @@ async function oneShot(config, auth, options, configPath) {
     todos: [],
     quiet: Boolean(options.print),
     outputFormat: options.outputFormat,
-    maxTurns: options.maxTurns || config.maxTurns || 25,
+    maxTurns: options.maxTurns || config.maxTurns || 100,
     maxBudget: options.maxBudget || config.maxBudget || null,
     spentCompute: 0,
     askApproval: async () => "n",

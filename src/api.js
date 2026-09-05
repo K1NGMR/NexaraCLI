@@ -128,7 +128,7 @@ function parseToolInput(value) {
   return {};
 }
 
-function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult, onSource, onFinish, onReasoning) {
+export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult, onSource, onFinish, onReasoning) {
   const line = raw.trim();
   if (!line || line.startsWith(":")) return;
   const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
@@ -190,13 +190,18 @@ function consumeDataLine(raw, state, onStatus, onText, onToolCall, onToolResult,
   } else if (type === "tool-input-available" || type === "tool-call") {
     const name = String(event.toolName || "");
     onStatus?.(`tool:${name || "tool"}`);
-    if (CLI_CLIENT_TOOL_NAMES.has(name) && !state.nativeCall) {
-      state.nativeCall = {
+    // A single assistant step can request several client tools at once (the
+    // model called Read+Read, or Read+Search, in parallel). Capturing only
+    // the first and silently ignoring the rest left the model waiting
+    // forever on a result the CLI never sent back for the others.
+    if (CLI_CLIENT_TOOL_NAMES.has(name) && (!event.toolCallId || !state.nativeCalls.some((call) => call.toolCallId === event.toolCallId))) {
+      const call = {
         name,
         arguments: parseToolInput(event.input ?? event.arguments ?? state.toolInputs?.get(event.toolCallId)),
         toolCallId: event.toolCallId || null,
       };
-      onToolCall?.(state.nativeCall);
+      state.nativeCalls.push(call);
+      onToolCall?.(call);
     }
   } else if (type === "tool-output-available" || type === "tool-result") {
     onToolResult?.({
@@ -302,7 +307,7 @@ export async function sendChat({
     }
   }
 
-  const state = { text: "", reasoning: "", nativeCall: null, lastUsage: null, sources: [], model: null, finished: false };
+  const state = { text: "", reasoning: "", nativeCalls: [], lastUsage: null, sources: [], model: null, finished: false };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const writeText = onText ?? ((text) => process.stdout.write(text));
@@ -352,7 +357,10 @@ export async function sendChat({
     summary,
     // Real provider usage for this turn (null when the stream carried none).
     usage: state.lastUsage ?? null,
-    nativeCall: state.nativeCall,
+    // nativeCall is kept for any code that still expects a single call; the
+    // agent loop uses nativeCalls so parallel tool calls all get executed.
+    nativeCall: state.nativeCalls[0] || null,
+    nativeCalls: state.nativeCalls,
     sources: state.sources,
     model: state.model,
   };

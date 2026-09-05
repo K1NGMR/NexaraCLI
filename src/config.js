@@ -16,7 +16,7 @@ const DEFAULT_CONFIG = {
   selectedReasoningEffort: "medium",
   permissionMode: "ask",
   noSessionPersistence: false,
-  maxTurns: 25,
+  maxTurns: 100,
   maxBudget: null,
   allowedTools: [],
   disallowedTools: [],

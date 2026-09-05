@@ -511,7 +511,7 @@ function spawnPossiblyBatch(executable, args, options) {
   return spawn(executable, args, { ...options, shell: false });
 }
 
-async function runCommand(command, cwd, { background = false, allowOutside = false } = {}) {
+async function runCommand(command, cwd, { background = false, allowOutside = false, signal } = {}) {
   const tokens = tokenizeCommand(command);
   const outsidePaths = toolPaths("Bash", { command }, cwd);
   if (outsidePaths.length && !allowOutside) {
@@ -556,19 +556,31 @@ async function runCommand(command, cwd, { background = false, allowOutside = fal
     });
     let stdout = "";
     let stderr = "";
+    let cancelled = false;
     const timer = setTimeout(() => {
       child.kill();
       resolve({ exitCode: -1, stdout, stderr: `${stderr}\nCommand timed out after 120 seconds.` });
     }, 120_000);
+    const onAbort = () => {
+      cancelled = true;
+      child.kill();
+    };
+    signal?.addEventListener("abort", onAbort);
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
     child.stdout.on("data", (chunk) => { stdout = truncate(`${stdout}${chunk.toString()}`); });
     child.stderr.on("data", (chunk) => { stderr = truncate(`${stderr}${chunk.toString()}`); });
     child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      cleanup();
+      if (cancelled) resolve({ exitCode: -1, stdout, stderr: `${stderr}\nCommand cancelled by user.`, cancelled: true });
+      else reject(error);
     });
-    child.once("close", (exitCode, signal) => {
-      clearTimeout(timer);
-      resolve({ exitCode: typeof exitCode === "number" ? exitCode : -1, signal, stdout, stderr });
+    child.once("close", (exitCode, exitSignal) => {
+      cleanup();
+      if (cancelled) resolve({ exitCode: -1, stdout, stderr: `${stderr}\nCommand cancelled by user.`, cancelled: true });
+      else resolve({ exitCode: typeof exitCode === "number" ? exitCode : -1, signal: exitSignal, stdout, stderr });
     });
   });
 }
@@ -605,7 +617,7 @@ async function checkPort(port, host = "127.0.0.1") {
   return `${host}:${numericPort} is not accepting connections.`;
 }
 
-async function applyUnifiedDiff(filePath, patch, cwd) {
+async function applyUnifiedDiff(filePath, patch, cwd, { signal } = {}) {
   const patchPaths = String(patch || "")
     .split(/\r?\n/)
     .filter((line) => /^(?:---|\+\+\+)\s+/.test(line))
@@ -622,10 +634,33 @@ async function applyUnifiedDiff(filePath, patch, cwd) {
     });
     let stdout = "";
     let stderr = "";
+    let cancelled = false;
+    // git apply reading from a patch that never closes stdin, or a stuck
+    // filesystem, previously had no way to end at all -- unlike Bash it had
+    // neither a timeout nor a cancellation path.
+    const timer = setTimeout(() => {
+      cancelled = true;
+      child.kill();
+    }, 120_000);
+    const onAbort = () => {
+      cancelled = true;
+      child.kill();
+    };
+    signal?.addEventListener("abort", onAbort);
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stdout, stderr }));
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once("close", (code) => {
+      cleanup();
+      resolve({ code: cancelled ? -1 : code, stdout, stderr: cancelled ? `${stderr}\nApplyDiff cancelled or timed out.` : stderr });
+    });
     child.stdin.end(String(patch || ""));
   });
   if (result.code !== 0) {
@@ -697,7 +732,7 @@ function agentSummary(id) {
   return `Agent ${id} · ${entry.status} · ${Math.round(elapsed / 1000)}s · ${entry.task}\n${entry.result || entry.output || "(still working)"}`;
 }
 
-export async function executeCliTool(name, args = {}, { cwd = process.cwd(), allowOutside = false } = {}) {
+export async function executeCliTool(name, args = {}, { cwd = process.cwd(), allowOutside = false, signal } = {}) {
   const toolName = String(name || "");
   if (!isLocalTool(toolName)) throw new Error(`The CLI does not execute ${toolName}.`);
   const pathArg = (...keys) => resolveWorkspacePath(firstArg(args, ...keys), cwd, { allowOutside });
@@ -904,7 +939,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       return (await workspaceIntegrationEntries(kind, cwd)).join("\n") || `No workspace ${kind} configuration found.`;
     }
     case "Bash": {
-      const result = await runCommand(firstArg(args, "command", "cmd", "script"), cwd, { allowOutside });
+      const result = await runCommand(firstArg(args, "command", "cmd", "script"), cwd, { allowOutside, signal });
       return `$ ${firstArg(args, "command", "cmd", "script")}\n${truncate(`${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`)}\n(exit ${result.exitCode})`;
     }
     case "RunInBackground": {
@@ -1095,7 +1130,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const filePath = pathArg("file_path", "path", "file");
       const patch = String(args.patch || "");
       if (!patch) throw new Error("ApplyDiff requires a unified diff patch.");
-      return applyUnifiedDiff(filePath, patch, cwd);
+      return applyUnifiedDiff(filePath, patch, cwd, { signal });
     }
     case "TodoWrite": {
       const todos = Array.isArray(args.todos) ? args.todos : [];
