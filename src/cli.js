@@ -254,7 +254,7 @@ function lastRealContext(state) {
   return (Number(usage.inputTokens) || 0) + (Number(usage.outputTokens) || 0);
 }
 
-const MODELS = [
+let MODELS = [
   ["router/autorouter", "AutoRouter (recommended)"],
   ["router/openrouter-free", "OpenRouter Free Route"],
   ["openai/gpt-oss-120b", "GPT-OSS-120B"],
@@ -399,6 +399,40 @@ const MODEL_ALIASES = new Map([
   ["sensenova-6.8", "sensenova/sensenova-6.8-flash-lite"],
 ]);
 
+// The website is the source of truth for model availability and capabilities.
+// Keep the bundled catalog as an offline fallback, but refresh it from the
+// sanitized server catalog whenever the CLI starts. This prevents new models,
+// vision support, reasoning options, and pricing from drifting between apps.
+async function refreshModelCatalog(appUrl) {
+  try {
+    const response = await fetch(`${String(appUrl || "").replace(/\/+$/, "")}/api/models`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return false;
+    const payload = await response.json();
+    const remote = Array.isArray(payload?.models) ? payload.models : [];
+    const usable = remote.filter((model) => typeof model?.id === "string" && typeof model?.name === "string");
+    if (usable.length < 2) return false;
+    MODELS = usable.map((model) => [model.id, model.name]);
+    MODEL_CONTEXT.clear();
+    MODEL_IMAGE_INPUT.clear();
+    MODEL_PRICING.clear();
+    for (const model of usable) {
+      if (Number.isFinite(model.contextWindow) && model.contextWindow > 0) MODEL_CONTEXT.set(model.id, model.contextWindow);
+      if (model.imageInput === true) MODEL_IMAGE_INPUT.add(model.id);
+      if (Number.isFinite(model.creditInputPricePerM) && Number.isFinite(model.creditOutputPricePerM)) {
+        MODEL_PRICING.set(model.id, { input: model.creditInputPricePerM, output: model.creditOutputPricePerM });
+      }
+    }
+    return true;
+  } catch {
+    // Offline startup remains usable with the bundled fallback catalog.
+    return false;
+  }
+}
+
 const SLASH_COMMANDS = [
   "/help", "/model", "/models", "/effort", "/attach", "/image", "/think", "/research",
   "/perplexity", "/plan", "/honest", "/goal", "/new", "/resume", "/threads", "/clear",
@@ -477,8 +511,11 @@ const color = {
   white: rgb(250, 249, 245),
   blue: rgb(93, 184, 166),
   magenta: rgb(204, 120, 92),
-  neon: rgb(0, 255, 77),
-  terminalWhite: rgb(245, 245, 245),
+  // Kept as aliases for older rendering paths, but deliberately mapped to
+  // Nexara's warm coral/cream system instead of the old neon green terminal
+  // treatment.
+  neon: rgb(204, 120, 92),
+  terminalWhite: rgb(250, 249, 245),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
 // The CLI uses a small, typography-first petal mark. A multi-line pixel
@@ -910,7 +947,7 @@ function printToolCall(call, { streamJson = false } = {}) {
     CheckPort: "Checking",
     ask_question: "Asking",
   })[name] || `Using ${name}`;
-  console.log(`  ${color.coral("◇")} ${color.cream(verb)}${color.dim(preview ? ` · ${preview}` : "")}`);
+  console.log(`  ${color.muted("┊")} ${color.coral("◆")} ${color.cream(verb)}${color.dim(preview ? `  ${preview}` : "")}`);
 }
 
 function printToolResult(name, result, { error = false, streamJson = false } = {}) {
@@ -923,8 +960,8 @@ function printToolResult(name, result, { error = false, streamJson = false } = {
   // capped the rest at eight lines for a small allow-list, which made tools
   // such as ListFiles look as if they returned only one result. Render every
   // returned line, wrapping long lines to the current terminal width.
-  console.log(`  ${label} ${color.muted(`${name} ${error ? "failed" : "done"}`)}`);
-  for (const line of lines) console.log(`     ${color.dim(line)}`);
+  console.log(`  ${color.muted("┊")} ${label} ${color.muted(`${name} ${error ? "failed" : "done"}`)}`);
+  for (const line of lines) console.log(`       ${color.dim(line)}`);
 }
 
 function normalizeCliTodos(rawTodos) {
@@ -1209,15 +1246,13 @@ async function printBanner(config, user = null, { resumed = false } = {}) {
   // The large reference mark is reserved for unusually tall terminals so it
   // never pushes the first prompt below the fold in PowerShell/CMD.
   const showMark = !resumed && Number(output.rows || 0) >= 48 && terminalWidth() >= 96;
+  const session = resumed ? "session resumed" : "new session";
+  const account = user?.email ? `  ${color.dim("·")}  ${color.muted(user.email)}` : "";
   console.log();
-  if (showMark) {
-    for (const row of NEXARA_CLI_LOGO) console.log(`  ${color.neon(row)}`);
-    console.log();
-  } else {
-    console.log(`  ${color.coral("✦")} ${color.cream("NEXARA CLI")} ${color.muted("· AI coding agent")}`);
-  }
-  console.log(`  ${color.muted("Directory")} ${color.cream(displayPath())}${user?.email ? ` ${color.dim("·")} ${color.muted(user.email)}` : ""}`);
-  console.log(color.dim("  Type a prompt, /help for commands, or Esc Esc to quit."));
+  console.log(`  ${color.coral("✦")} ${color.cream("Nexara")} ${color.muted("/ Model Cat")} ${color.dim("·")} ${color.muted(session)}`);
+  console.log(`  ${color.muted("workspace")} ${color.cream(displayPath())}${account}`);
+  console.log(`  ${color.dim("────────────────────────────────────────────────────────────────────────")}`);
+  console.log(`  ${color.muted("Ask anything")}${color.dim(" · ")} ${color.muted("/ commands")}${color.dim(" · ")} ${color.muted("Ctrl+C cancel")}`);
   console.log();
 }
 
@@ -1390,11 +1425,11 @@ function printUserTurn(text, files = [], timestamp = null) {
   const stamp = timestamp
     ? new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  console.log(`  ${color.dim(`[${stamp}]`)}`);
+  console.log(`  ${color.coral("You")} ${color.dim(stamp)}`);
   const lines = wrapChatText(text);
   lines.forEach((line, index) => {
     const trailer = index === lines.length - 1 ? ` ${color.dim(COPY_GLYPH)}` : "";
-    console.log(`  ${color.neon("▌")} ${color.italicCream(line)}${trailer}`);
+    console.log(`  ${color.coral("│")} ${color.italicCream(line)}${trailer}`);
   });
   if (files.length) {
     console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
@@ -1403,8 +1438,7 @@ function printUserTurn(text, files = [], timestamp = null) {
 }
 
 function printAssistantHeader(state, mode) {
-  // Responses intentionally stay visually quiet, matching the reference:
-  // thinking owns its own disclosure row and the answer begins as plain text.
+  console.log(`  ${color.coral("Nexara")} ${color.dim("· Model Cat")}`);
 }
 
 function printConversationHistory(state) {
@@ -1479,7 +1513,7 @@ function printSessionFooter(state) {
   const border = "─".repeat(width);
   // Full-width model strip and a plain rectangular composer mirror the
   // PowerShell reference while retaining the CLI's live activity details.
-  process.stdout.write(`${ansi("48;2;47;62;84;38;2;190;202;224", statusLine)}\n`);
+  process.stdout.write(`${ansi("48;2;24;23;21;38;2;250;249;245", statusLine)}\n`);
   process.stdout.write(`${color.terminalWhite("┌")}${color.terminalWhite(border)}${color.terminalWhite("┐")}\n`);
   return 2;
 }
@@ -3513,7 +3547,7 @@ async function interactive(config, auth, configPath, existingState) {
 
   function fixedComposerFooter() {
     const model = color.muted(modelLabel(state.config.selectedModel));
-    const details = state.busy ? color.muted("Compute Limit · Ctrl+C cancels") : color.muted("Compute Limit · / opens commands");
+    const details = state.busy ? color.muted("Compute limit · Ctrl+C cancels") : color.muted("Compute limit · / commands");
     return `${model} ${details}`;
   }
 
@@ -3533,7 +3567,7 @@ async function interactive(config, auth, configPath, existingState) {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
     const status = shorten(fixedComposerFooterLine(), width);
-    output.write(`\u001b7\u001b[${railTop};1H\u001b[48;2;47;62;84m\u001b[38;2;190;202;224m\u001b[2K${status}\u001b[0m\u001b8`);
+    output.write(`\u001b7\u001b[${railTop};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${status}\u001b[0m\u001b8`);
   }
 
   function drawFixedComposerRail({ includeInput = false } = {}) {
@@ -3551,7 +3585,7 @@ async function interactive(config, auth, configPath, existingState) {
     // Terminal never autowraps a chrome character into the chat viewport.
     const frameWidth = Math.max(18, width - 1);
     const frame = "═".repeat(Math.max(1, frameWidth - 2));
-    output.write(`\u001b[${top};1H\u001b[48;2;47;62;84m\u001b[38;2;190;202;224m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
+    output.write(`\u001b[${top};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
     output.write(`\u001b[${borderRow};1H\u001b[2K${color.terminalWhite(`╔${frame}╗`)}`);
     if (includeInput) {
       for (let row = inputStartRow; row < bottomRuleRow; row += 1) {
@@ -3582,7 +3616,7 @@ async function interactive(config, auth, configPath, existingState) {
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[${inputRow};1H`);
-      rl.setPrompt("\u001b[38;2;245;245;245m║ \u001b[38;2;0;255;77m❯ \u001b[38;2;190;202;224m\u001b[0m ");
+      rl.setPrompt("\u001b[38;2;250;249;245m║ \u001b[38;2;204;120;92m› \u001b[38;2;250;249;245m\u001b[0m ");
       rl.prompt();
       composerMounted = true;
       return;
@@ -3592,7 +3626,7 @@ async function interactive(config, auth, configPath, existingState) {
     // color rather than trusting `stdout.columns` (which can be wrong in
     // Windows Terminal). This is the clean, full-width command rectangle.
     output.write("\r\u001b[2K\u001b[0m\r");
-    rl.setPrompt("\u001b[38;2;245;245;245m│ \u001b[38;2;0;255;77m❯ \u001b[0m ");
+    rl.setPrompt("\u001b[38;2;250;249;245m│ \u001b[38;2;204;120;92m› \u001b[0m ");
     rl.prompt();
   }
 
@@ -3897,6 +3931,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (options.disallowedTools.length) nextConfig.disallowedTools = options.disallowedTools;
   if (options.noSessionPersistence) nextConfig.noSessionPersistence = true;
   const auth = createAuth(nextConfig);
+  await refreshModelCatalog(nextConfig.appUrl);
   const command = options.prompt[0];
   if (command === "login" && options.prompt.length === 1) { await login(nextConfig, auth, options.google, options.qr); return; }
   if (command === "logout" && options.prompt.length === 1) { await auth.logout(); console.log("Signed out."); return; }
