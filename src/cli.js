@@ -1242,23 +1242,35 @@ async function animateText(text, paint = color.muted) {
 }
 
 async function printBanner(config, user = null, { resumed = false } = {}) {
-  // Keep startup compact: the transcript and composer should own the screen.
-  // The large reference mark is reserved for unusually tall terminals so it
-  // never pushes the first prompt below the fold in PowerShell/CMD.
-  const showMark = !resumed && Number(output.rows || 0) >= 48 && terminalWidth() >= 96;
-  const session = resumed ? "session resumed" : "new session";
-  const account = user?.email ? `  ${color.dim("·")}  ${color.muted(user.email)}` : "";
-  console.log();
-  console.log(`  ${color.coral("✦")} ${color.cream("Nexara")} ${color.muted("/ Model Cat")} ${color.dim("·")} ${color.muted(session)}`);
-  console.log(`  ${color.muted("workspace")} ${color.cream(displayPath())}${account}`);
-  console.log(`  ${color.dim("────────────────────────────────────────────────────────────────────────")}`);
-  console.log(`  ${color.muted("Ask anything")}${color.dim(" · ")} ${color.muted("/ commands")}${color.dim(" · ")} ${color.muted("Ctrl+C cancel")}`);
-  console.log();
+  // OpenCode's current shell reserves the canvas for the welcome surface and
+  // keeps workspace/account metadata in the footer. The transcript renderer
+  // owns everything after this point.
 }
 
 function printNewConversationIntro() {
-  // The visual shell intentionally stays quiet after the masthead, matching
-  // the reference's open canvas and letting the command box be the focus.
+  const width = Math.max(42, terminalWidth());
+  const center = (value) => {
+    const padding = Math.max(0, Math.floor((width - visibleLength(value)) / 2));
+    return `${" ".repeat(padding)}${value}`;
+  };
+  const commandRows = [
+    ["/help", "Show help and keyboard shortcuts", "ctrl+p h"],
+    ["/model", "Choose a model from the Nexara catalog", "ctrl+p m"],
+    ["/new", "Start a new session", "ctrl+p n"],
+    ["/compact", "Compact the current session", "ctrl+p c"],
+    ["/threads", "Browse saved sessions", "ctrl+p s"],
+  ];
+  console.log();
+  console.log(center(`${color.coral("✦")} ${color.cream("Nexara")}`));
+  console.log(center(color.muted("the open source coding agent")));
+  console.log();
+  commandRows.forEach(([command, description, shortcut]) => {
+    const row = `  ${color.coral(command.padEnd(12))} ${color.muted(description.padEnd(38))} ${color.dim(shortcut)}`;
+    console.log(center(row));
+  });
+  console.log();
+  console.log(center(color.dim("Ask anything...")));
+  console.log();
 }
 
 function printLoginScreen() {
@@ -3577,22 +3589,17 @@ async function interactive(config, auth, configPath, existingState) {
     // run after a resize changes terminalRows()) still erases these rows.
     railRows = rows;
     railTop = top;
-    const borderRow = top + 1;
-    const inputStartRow = top + 2;
+    const inputStartRow = top + 1;
     const bottomRuleRow = rows;
+    // Keep one column of safety on the right edge for Windows Terminal.
     const width = Math.max(20, Number(output.columns) || 80);
-    // Keep every draw one column short of the terminal edge so Windows
-    // Terminal never autowraps a chrome character into the chat viewport.
-    const frameWidth = Math.max(18, width - 1);
-    const frame = "═".repeat(Math.max(1, frameWidth - 2));
     output.write(`\u001b[${top};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
-    output.write(`\u001b[${borderRow};1H\u001b[2K${color.terminalWhite(`╔${frame}╗`)}`);
     if (includeInput) {
       for (let row = inputStartRow; row < bottomRuleRow; row += 1) {
-        output.write(`\u001b[${row};1H\u001b[2K${color.terminalWhite(`║${" ".repeat(Math.max(1, frameWidth - 2))}║`)}\u001b[0m`);
+        output.write(`\u001b[${row};1H\u001b[2K\u001b[0m`);
       }
     }
-    output.write(`\u001b[${bottomRuleRow};1H\u001b[2K${color.terminalWhite(`╚${frame}╝`)}\u001b[0m`);
+    output.write(`\u001b[${bottomRuleRow};1H\u001b[2K\u001b[0m`);
   }
 
   function showComposer() {
@@ -3600,7 +3607,7 @@ async function interactive(config, auth, configPath, existingState) {
     clearComposerFooter();
     if (fixedComposer) {
       const rows = terminalRows();
-      const inputRow = transcriptBottom() + 3;
+      const inputRow = transcriptBottom() + 2;
       // Save the transcript cursor, then draw a dedicated four-row rail. The
       // scroll region prevents long responses from ever pushing the controls.
       output.write("\u001b[s");
@@ -3616,7 +3623,7 @@ async function interactive(config, auth, configPath, existingState) {
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[${inputRow};1H`);
-      rl.setPrompt("\u001b[38;2;250;249;245m║ \u001b[38;2;204;120;92m› \u001b[38;2;250;249;245m\u001b[0m ");
+      rl.setPrompt("\u001b[38;2;250;249;245m  \u001b[38;2;204;120;92m› \u001b[0m ");
       rl.prompt();
       composerMounted = true;
       return;
@@ -3626,7 +3633,7 @@ async function interactive(config, auth, configPath, existingState) {
     // color rather than trusting `stdout.columns` (which can be wrong in
     // Windows Terminal). This is the clean, full-width command rectangle.
     output.write("\r\u001b[2K\u001b[0m\r");
-    rl.setPrompt("\u001b[38;2;250;249;245m│ \u001b[38;2;204;120;92m› \u001b[0m ");
+    rl.setPrompt("\u001b[38;2;250;249;245m  \u001b[38;2;204;120;92m› \u001b[0m ");
     rl.prompt();
   }
 
