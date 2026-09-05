@@ -1,6 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-
 import { CLI_CLIENT_TOOL_NAMES } from "./tools.js";
 import { withTimeout } from "./auth.js";
 
@@ -429,26 +427,4 @@ export function userMessage(text, files = []) {
 
 export function messageText(message) {
   return textOf(message);
-}
-
-/**
- * Transcribes a recorded audio file through the Nexara app's server-side
- * speech-to-text proxy (nvidia/parakeet-tdt-0.6b-v3 on OpenRouter), so the
- * CLI never needs the API key itself.
- */
-export async function transcribeAudio({ appUrl, token, filePath }) {
-  const data = await fs.readFile(filePath);
-  const form = new FormData();
-  form.append("file", new Blob([data], { type: "audio/wav" }), "voice.wav");
-  const response = await fetch(`${appUrl.replace(/\/+$/, "")}/api/transcribe`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-    signal: AbortSignal.timeout(90_000),
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(body?.error || `Transcription failed (${response.status}).`);
-  }
-  return (body?.text ?? "").trim();
 }

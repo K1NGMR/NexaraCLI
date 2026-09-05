@@ -5,9 +5,8 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 import { createAuth } from "./auth.js";
-import { createThread, listThreads, loadThread, MAX_ACCUMULATED_TEXT_BYTES, messageText, sendChat, transcribeAudio, userMessage } from "./api.js";
+import { createThread, listThreads, loadThread, MAX_ACCUMULATED_TEXT_BYTES, messageText, sendChat, userMessage } from "./api.js";
 import { loadConfig, saveConfig } from "./config.js";
-import { startMicRecording } from "./mic.js";
 import { createTerminalEditor } from "./terminal-editor.js";
 import { printQr } from "./qr.js";
 import { listLocalSessions, loadLocalSession, localSessionPath, saveLocalSession, SESSION_DIR } from "./sessions.js";
@@ -2031,8 +2030,6 @@ ${color.cyan("Nexara CLI commands")}
   /login                        Sign in again or switch account
   /quit                         Exit the CLI
 
-${color.dim("Voice: press M at an empty prompt to record your mic; press M again to")}
-${color.dim("stop and transcribe your words into the input (speech-to-text).")}
 ${color.dim("Thinking: click the live Thinking indicator to expand the model's emitted reasoning.")}
 ${color.dim("Tip: type / and press Tab to autocomplete; use ↑/↓ or numpad arrows to browse.")}
 ${color.dim("Pipes: set NO_COLOR=1 for plain output, or use --output-format json|stream-json for automation.")}
@@ -3162,15 +3159,6 @@ async function interactive(config, auth, configPath, existingState) {
   state.askQuestion = async (message) => askInComposer(message);
   state.askChoice = async (question) => withEditorPaused(() => selectQuestionInteractive(question));
 
-  // Push-to-talk: press M at the prompt to start recording, press M again to
-  // stop and transcribe. The transcript is appended to the current line.
-  let mic = null;
-  let voiceBusy = false;
-  let voiceHintShown = false;
-  // rl.write() re-emits keypress events for every character it inserts, so
-  // ignore 'M' for a beat after appending a transcript.
-  const ignoreKeypressUntil = { current: 0 };
-
   // The status strip is a composer footer, not part of the conversation.
   // Keep its height so a submitted line can remove it before the next turn
   // is committed, leaving the transcript growing down from the top.
@@ -3430,78 +3418,12 @@ async function interactive(config, auth, configPath, existingState) {
     scheduleSlashSuggestions();
   }
 
-  async function transcribeVoice() {
-    const recorder = mic;
-    mic = null;
-    diagnostic("Transcribing…");
-    let filePath = null;
-    try {
-      filePath = await recorder.stop();
-      if (!filePath) {
-        if (!voiceHintShown) diagnostic(color.yellow("No audio captured. Try again."));
-        return;
-      }
-      const token = await state.auth.accessToken();
-      if (!token) {
-        diagnostic(color.red("Your session expired. Run `nexara login` again."));
-        return;
-      }
-      const text = await transcribeAudio({ appUrl: state.config.appUrl, token, filePath });
-      if (text) {
-        ignoreKeypressUntil.current = Date.now() + 400;
-        if (!rl.closed) rl.write(` ${text}`);
-      } else {
-        diagnostic(color.yellow("No speech detected. Try again."));
-      }
-    } catch (error) {
-      diagnostic(color.red(error instanceof Error ? error.message : String(error)));
-    } finally {
-      voiceBusy = false;
-      if (filePath) await fs.rm(filePath, { force: true }).catch(() => {});
-    }
-  }
-
-  async function toggleVoice() {
-    if (voiceBusy) return;
-    if (mic) {
-      voiceBusy = true;
-      await transcribeVoice();
-    } else {
-      diagnostic("🎙  Recording… press M again to stop and transcribe");
-      try {
-        mic = await startMicRecording({
-          onStatus: () => diagnostic("🎙  Recording… press M again to stop"),
-          onError: (message) => {
-            voiceHintShown = true;
-            diagnostic(color.red(message));
-          },
-        });
-      } catch (error) {
-        diagnostic(color.red(error instanceof Error ? error.message : String(error)));
-      }
-    }
-  }
-
   const onKeypress = (str, key) => {
     if (state.modalOpen) return;
     if (key?.ctrl && key.name === "c") {
       if (state.cancelCurrent) state.cancelCurrent();
       return;
     }
-    // Keep lowercase `m` available for normal typing. The push-to-talk
-    // shortcut is intentionally uppercase-only, matching the help text and
-    // avoiding accidental recording when a user types words containing m.
-    if (!key || str !== "M" || key.name !== "m" || key.ctrl || key.meta || key.alt || !key.shift) return;
-    if (Date.now() < ignoreKeypressUntil.current) return;
-    // M is push-to-talk only on an otherwise-empty prompt. Previously this
-    // listener fired for lowercase m and for the m in `/model`, which erased
-    // the character and launched the microphone instead of allowing typing.
-    const currentLine = typeof rl.line === "string" ? rl.line : "";
-    if (currentLine !== "" && currentLine !== "m" && currentLine !== "M") return;
-    // readline already inserted the 'm' into the line — erase it when the
-    // cursor is at the end, then toggle recording.
-    if (currentLine === "m" || currentLine === "M") rl.write("\b \b");
-    void toggleVoice();
   };
 
   const onSlashKeypress = (str, key = {}) => {
@@ -3806,7 +3728,6 @@ async function interactive(config, auth, configPath, existingState) {
     setMouseReporting(false);
     cancelSlashSuggestionTimer();
     clearSlashSuggestions(true);
-    if (mic) await mic.stop().catch(() => {});
     clearBackgroundProcesses();
     if (fixedComposer) output.write("\u001b[r\u001b[0m\r\n");
     rl.close();

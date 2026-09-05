@@ -191,16 +191,6 @@ When a model emits reasoning, click the live `Thinking… (click to expand)` lin
 to open its emitted reasoning transcript; click again to collapse it. Models
 that do not expose reasoning will only show the normal activity indicator.
 
-## Voice input (push-to-talk)
-
-At the REPL prompt, press **M** to start recording from your microphone, and press **M** again to stop and transcribe your words into the input line (speech-to-text via Nexara's server-side `openai/whisper-large-v3` transcription). Then press Enter to send, or edit the transcript first.
-
-Recording works on Windows 10+ out of the box (built-in WinRT AudioGraph). If the first run says your microphone produced no audio, check that the mic isn't muted and that Windows allows desktop apps to use the microphone (Settings → Privacy & security → Microphone). If `ffmpeg` is on your PATH it is used as a fallback on other platforms.
-
-```text
-you ▸ (press M) 🎙  Recording… press M again to stop and transcribe
-```
-
 ## Images
 
 Images are read locally and sent to Nexara as standard multimodal UI message file parts. Supported types include PNG, JPEG, GIF, WebP, BMP, and SVG. The CLI rejects files larger than 3 MB before they reach the server; resize very large screenshots first because base64 encoding increases request size.
