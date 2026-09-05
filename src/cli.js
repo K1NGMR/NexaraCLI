@@ -3513,11 +3513,14 @@ async function interactive(config, auth, configPath, existingState) {
       if (state.cancelCurrent) state.cancelCurrent();
       return;
     }
-    if (!key || key.name !== "m" || key.ctrl || key.meta || key.alt || key.shift) return;
+    // Keep lowercase `m` available for normal typing. The push-to-talk
+    // shortcut is intentionally uppercase-only, matching the help text and
+    // avoiding accidental recording when a user types words containing m.
+    if (!key || str !== "M" || key.name !== "m" || key.ctrl || key.meta || key.alt || !key.shift) return;
     if (Date.now() < ignoreKeypressUntil.current) return;
     // M is push-to-talk only on an otherwise-empty prompt. Previously this
-    // listener fired for the m in `/model`, which erased the character and
-    // launched the microphone instead of allowing the command to be typed.
+    // listener fired for lowercase m and for the m in `/model`, which erased
+    // the character and launched the microphone instead of allowing typing.
     const currentLine = typeof rl.line === "string" ? rl.line : "";
     if (currentLine !== "" && currentLine !== "m" && currentLine !== "M") return;
     // readline already inserted the 'm' into the line — erase it when the
