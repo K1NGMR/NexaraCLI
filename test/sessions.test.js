@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 
 import { listLocalSessions, loadLocalSession, saveLocalSession } from "../src/sessions.js";
 
-// Local session files live in the real ~/.nexara/sessions directory (no
-// injectable override exists), so these use uniquely-prefixed thread ids and
-// always clean up after themselves.
+const TEST_SESSION_DIR = path.join(process.cwd(), `.test-sessions-${process.pid}`);
+process.env.NEXARA_SESSION_DIR = TEST_SESSION_DIR;
 const PREFIX = `test-acct-scope-${Date.now()}`;
 
 test("a session saved under one account is invisible to a different account", async () => {
@@ -25,22 +26,24 @@ test("a session saved under one account is invisible to a different account", as
     assert.ok(listedForA.some((record) => record.threadId === ownId));
     assert.ok(!listedForA.some((record) => record.threadId === otherId), "listing must not leak another account's session");
   } finally {
-    const { unlink } = await import("node:fs/promises");
     const { localSessionPath } = await import("../src/sessions.js");
-    await unlink(localSessionPath(ownId)).catch(() => {});
-    await unlink(localSessionPath(otherId)).catch(() => {});
+    await fs.unlink(localSessionPath(ownId)).catch(() => {});
+    await fs.unlink(localSessionPath(otherId)).catch(() => {});
   }
 });
 
-test("a legacy session with no accountId stays visible to any account", async () => {
+test("a legacy session with no accountId is not readable without ownership", async () => {
   const legacyId = `${PREFIX}-legacy`;
   try {
     await saveLocalSession({ threadId: legacyId, messages: [{ role: "user", parts: [] }] });
     const loaded = await loadLocalSession(legacyId, "user-a");
-    assert.ok(loaded, "a pre-existing session with no recorded owner must not be locked out");
+    assert.equal(loaded, null, "a session without an owner must not become cross-account readable");
   } finally {
-    const { unlink } = await import("node:fs/promises");
     const { localSessionPath } = await import("../src/sessions.js");
-    await unlink(localSessionPath(legacyId)).catch(() => {});
+    await fs.unlink(localSessionPath(legacyId)).catch(() => {});
   }
+});
+
+test.after(async () => {
+  await fs.rm(TEST_SESSION_DIR, { recursive: true, force: true });
 });

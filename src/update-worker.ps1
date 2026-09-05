@@ -13,9 +13,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repository = 'K1NGMR/NexaraCLI'
-$archiveUrl = "https://github.com/$repository/archive/refs/heads/main.zip?version=$TargetVersion"
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("nexara-cli-update-" + [guid]::NewGuid().ToString('N'))
-$zipFile = "$tempRoot.zip"
+$packageFile = Join-Path $tempRoot ("nexara-cli-$TargetVersion.tgz")
 
 function Write-State([hashtable]$Patch) {
   try {
@@ -49,20 +48,22 @@ function Fail([string]$Message) {
 }
 
 try {
-  if ($VerboseOutput) { Write-Host "Downloading nexara-cli $TargetVersion..." -ForegroundColor Cyan }
+  if ($VerboseOutput) { Write-Host "Downloading verified nexara-cli $TargetVersion..." -ForegroundColor Cyan }
   New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
-  Invoke-WebRequest -Uri $archiveUrl -OutFile $zipFile -UseBasicParsing
-  Expand-Archive -LiteralPath $zipFile -DestinationPath $tempRoot -Force
-
-  $archiveRoot = Get-ChildItem -LiteralPath $tempRoot -Directory | Select-Object -First 1
-  if (-not $archiveRoot) { Fail 'The GitHub archive was empty.' }
-  $cliRoot = $archiveRoot.FullName
-  $packageFile = Join-Path $cliRoot 'package.json'
-  if (-not (Test-Path -LiteralPath $packageFile)) { Fail 'The NexaraCLI package was not found in the GitHub archive.' }
-  $package = Get-Content -LiteralPath $packageFile -Raw | ConvertFrom-Json
-  if ($package.version -ne $TargetVersion) {
-    Fail "Downloaded source version $($package.version) does not match requested version $TargetVersion."
-  }
+  $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'nexara-cli-updater' }
+  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases/tags/v$TargetVersion" -Headers $headers -Method Get
+  if ($release.draft -or $release.prerelease -or $release.tag_name -ne "v$TargetVersion") { Fail 'The requested CLI release is not a published stable tag.' }
+  $assetName = "nexara-cli-$TargetVersion.tgz"
+  $packageAsset = @($release.assets) | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
+  $manifestAsset = @($release.assets) | Where-Object { $_.name -eq 'checksums.json' } | Select-Object -First 1
+  if (-not $packageAsset -or -not $manifestAsset) { Fail 'The CLI release is missing its package or checksum manifest.' }
+  Invoke-WebRequest -Uri $packageAsset.browser_download_url -Headers $headers -OutFile $packageFile -UseBasicParsing
+  $manifest = Invoke-RestMethod -Uri $manifestAsset.browser_download_url -Headers $headers -Method Get
+  $checksumProperty = $manifest.files.psobject.Properties[$assetName]
+  $expectedHash = [string]$checksumProperty.Value
+  if ($manifest.version -ne $TargetVersion -or $expectedHash -notmatch '^[0-9a-fA-F]{64}$') { Fail 'The CLI checksum manifest is invalid.' }
+  $actualHash = (Get-FileHash -LiteralPath $packageFile -Algorithm SHA256).Hash
+  if ($actualHash -ne $expectedHash) { Fail 'The downloaded CLI package failed SHA-256 verification.' }
 
   $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
   if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
@@ -74,17 +75,6 @@ try {
   $globalPrefix = (& cmd.exe /c "`"$($npm.Source)`" prefix --global" | Out-String).Trim()
   if (-not $globalRoot -or -not $globalPrefix) { Fail 'Could not determine npm global install paths.' }
 
-  $oldPackage = Join-Path $globalRoot 'nexara-cli'
-  if (Test-Path -LiteralPath $oldPackage) {
-    Remove-Item -LiteralPath $oldPackage -Recurse -Force -ErrorAction SilentlyContinue
-  }
-  foreach ($shim in @('nexara', 'nexara.cmd', 'nexara.ps1')) {
-    $shimPath = Join-Path $globalPrefix $shim
-    if (Test-Path -LiteralPath $shimPath) {
-      Remove-Item -LiteralPath $shimPath -Force -ErrorAction SilentlyContinue
-    }
-  }
-
   # Drive npm through cmd.exe. Calling npm.cmd directly from PowerShell while
   # silencing stderr is a trap: PowerShell turns npm's stderr noise (e.g. the
   # "using --force" warning) into an error object, which trips
@@ -95,10 +85,10 @@ try {
   # trigger the stderr-to-error trap this avoids).
   if ($VerboseOutput) {
     Write-Host "Installing nexara-cli $TargetVersion globally..." -ForegroundColor Cyan
-    & cmd.exe /c "`"$($npm.Source)`" install --global `"$cliRoot`" --no-fund --no-audit --force"
+    & cmd.exe /c "`"$($npm.Source)`" install --global `"$packageFile`" --no-fund --no-audit --force"
     $npmExit = $LASTEXITCODE
   } else {
-    & cmd.exe /c "`"$($npm.Source)`" install --global `"$cliRoot`" --no-fund --no-audit --force >nul 2>&1"
+    & cmd.exe /c "`"$($npm.Source)`" install --global `"$packageFile`" --no-fund --no-audit --force >nul 2>&1"
     $npmExit = $LASTEXITCODE
   }
   if ($npmExit -ne 0) { Fail "npm install failed with exit code $npmExit." }
@@ -120,5 +110,4 @@ try {
   Fail ([string]$_.Exception.Message)
 } finally {
   Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $zipFile -Force -ErrorAction SilentlyContinue
 }

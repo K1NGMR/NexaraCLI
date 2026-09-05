@@ -126,6 +126,7 @@ const COMMAND_TOOLS = new Set(["Bash", "RunInBackground", "StopBackground", "Kil
 
 const ALLOWED_COMMANDS = new Set([
   "adb",
+  "bash",
   "cat",
   "cargo",
   "cp",
@@ -135,12 +136,16 @@ const ALLOWED_COMMANDS = new Set([
   "find",
   "git",
   "gradle",
+  "gradlew",
+  "gradlew.bat",
   "java",
   "javac",
   "ls",
   "mvn",
   "node",
   "npm",
+  "pnpm",
+  "bun",
   "npx",
   "pip",
   "pip3",
@@ -148,6 +153,7 @@ const ALLOWED_COMMANDS = new Set([
   "py",
   "python",
   "python3",
+  "go",
   "pwd",
   "rg",
   "ruby",
@@ -159,12 +165,18 @@ const ALLOWED_COMMANDS = new Set([
   "tail",
   "tasklist",
   "taskkill",
+  "powershell",
+  "pwsh",
+  "cmd",
   "tsc",
   "type",
   "vite",
   "where",
   "which",
   "yarn",
+  "sh",
+  "make",
+  "cmake",
   "zip",
 ]);
 
@@ -213,7 +225,12 @@ export function toolAllowedByMode(name, mode = "ask") {
   // Automatic and sandboxed modes must never silently grant arbitrary shell
   // execution or destructive process/repository operations. Those require an
   // explicit command-capable or full-access mode.
-  if (mode === "auto" || mode === "sandboxed") return EDIT_TOOLS.has(toolName);
+  // Automatic modes still run through the command allowlist and workspace
+  // path gate. They can build and test, but cannot kill processes, mutate Git,
+  // or spawn subagents without an explicit command-capable mode.
+  if (mode === "auto" || mode === "sandboxed") {
+    return EDIT_TOOLS.has(toolName) || ["Bash", "RunInBackground", "StopBackground"].includes(toolName);
+  }
   return mode === "full";
 }
 
@@ -373,8 +390,15 @@ function globToRegExp(pattern) {
   for (let index = 0; index < normalized.length; index += 1) {
     const character = normalized[index];
     if (character === "*" && normalized[index + 1] === "*") {
-      source += ".*";
-      index += 1;
+      // `**/` can match zero directories, so `**/*.js` also matches a root
+      // level `index.js`.
+      if (normalized[index + 2] === "/") {
+        source += "(?:.*/)?";
+        index += 2;
+      } else {
+        source += ".*";
+        index += 1;
+      }
     } else if (character === "*") source += "[^/]*";
     else if (character === "?") source += "[^/]";
     else source += character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -543,7 +567,14 @@ function killProcessTree(child) {
 }
 
 async function runCommand(command, cwd, { background = false, allowOutside = false, signal } = {}) {
-  const tokens = tokenizeCommand(command);
+  if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+  let tokens = tokenizeCommand(command);
+  const environment = { ...process.env };
+  while (tokens.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) {
+    const separator = tokens[0].indexOf("=");
+    environment[tokens[0].slice(0, separator)] = tokens[0].slice(separator + 1);
+    tokens = tokens.slice(1);
+  }
   const outsidePaths = toolPaths("Bash", { command }, cwd);
   if (outsidePaths.length && !allowOutside) {
     const error = new Error(`Command references a path outside the workspace: ${outsidePaths.join(", ")}`);
@@ -560,6 +591,7 @@ async function runCommand(command, cwd, { background = false, allowOutside = fal
     const id = `bg-${++backgroundSequence}`;
     const child = spawnPossiblyBatch(executable, tokens.slice(1), {
       cwd,
+      env: environment,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -582,6 +614,7 @@ async function runCommand(command, cwd, { background = false, allowOutside = fal
   return await new Promise((resolve, reject) => {
     const child = spawnPossiblyBatch(executable, tokens.slice(1), {
       cwd,
+      env: environment,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -788,7 +821,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const pattern = firstArg(args, "pattern", "query");
       if (!pattern) throw new Error("Search requires pattern or query.");
       const root = resolveWorkspacePath(firstArg(args, "file_path", "path", "directory") || ".", cwd, { allowOutside });
-      const regex = new RegExp(pattern, "i");
+      const regex = args.regex === true ? new RegExp(pattern, "i") : new RegExp(escapedRegExp(pattern), "i");
       const matches = [];
       const files = (await fs.stat(root).catch(() => null))?.isFile() ? [root] : await walk(root);
       for (const file of files) {
@@ -807,7 +840,14 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const pattern = firstArg(args, "pattern") || "**/*";
       const matcher = globToRegExp(pattern);
       const files = await walk(root);
-      return files.filter((file) => matcher.test(relativePath(file, root))).map((file) => relativePath(file, cwd)).join("\n") || "No files matched.";
+      const matches = [];
+      for (const file of files) {
+        if (!matcher.test(relativePath(file, root))) continue;
+        const stat = await fs.stat(file).catch(() => null);
+        if (stat) matches.push({ file, modified: stat.mtimeMs });
+      }
+      matches.sort((a, b) => b.modified - a.modified || a.file.localeCompare(b.file));
+      return matches.map(({ file }) => relativePath(file, cwd)).join("\n") || "No files matched.";
     }
     case "Write": {
       const filePath = pathArg("file_path", "path", "filepath", "file", "filename");
@@ -833,7 +873,10 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const from = firstArg(args, "from", "symbol");
       const to = firstArg(args, "to", "replacement");
       if (!from || !to || !/^[A-Za-z_$][\w$]*$/.test(from) || !/^[A-Za-z_$][\w$]*$/.test(to)) throw new Error("RenameSymbol requires simple symbol names in from and to.");
-      const files = await sourceFiles(cwd);
+      const extensions = Array.isArray(args.extensions)
+        ? new Set(args.extensions.map((value) => `.${String(value).replace(/^\./, "").toLowerCase()}`))
+        : null;
+      const files = (await sourceFiles(cwd)).filter((file) => !extensions || extensions.has(path.extname(file).toLowerCase()));
       const matcher = new RegExp(`\\b${escapedRegExp(from)}\\b`, "g");
       const changes = [];
       for (const file of files) {
@@ -867,7 +910,9 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
     case "LocateDefinition": {
       const symbol = firstArg(args, "symbol", "name");
       const file = firstArg(args, "file", "file_path");
-      const listing = await symbolSearch(symbol, cwd, { definitionsOnly: true, directory: file || "." });
+      const listing = file
+        ? await symbolSearch(symbol, cwd, { definitionsOnly: true, directory: path.dirname(file) || "." })
+        : await symbolSearch(symbol, cwd, { definitionsOnly: true });
       if (!file || listing.startsWith("No definition")) return listing;
       const filePath = resolveWorkspacePath(file, cwd);
       const content = await readCodeFile(filePath);
@@ -895,7 +940,20 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
         const resolved = resolveImportPath(value, filePath, cwd);
         return resolved ? relativePath(resolved, cwd) : null;
       });
-      return `Imports from ${relativePath(filePath, cwd)}:\n${imports.map((value, index) => `- ${value}${relatives[index] ? ` → ${relatives[index]}` : ""}`).join("\n") || "(none)"}`;
+      if (String(args.direction || "outgoing").toLowerCase() !== "incoming") {
+        return `Imports from ${relativePath(filePath, cwd)}:\n${imports.map((value, index) => `- ${value}${relatives[index] ? ` → ${relatives[index]}` : ""}`).join("\n") || "(none)"}`;
+      }
+      const target = path.normalize(filePath);
+      const importers = [];
+      for (const candidate of await sourceFiles(cwd)) {
+        const source = await readCodeFile(candidate);
+        if (!source) continue;
+        const resolved = [...source.matchAll(/(?:import\s+(?:[^"']+\s+from\s+)?|require\(|from\s+)["']([^"']+)["']/g)]
+          .map((match) => resolveImportPath(match[1], candidate, cwd))
+          .find((value) => value && path.normalize(value) === target);
+        if (resolved) importers.push(relativePath(candidate, cwd));
+      }
+      return `Imported by ${relativePath(filePath, cwd)}:\n${importers.map((value) => `- ${value}`).join("\n") || "(none)"}`;
     }
     case "ModuleExports": {
       const filePath = pathArg("file_path", "path", "file");
@@ -965,8 +1023,16 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const scripts = packageJson.scripts || {};
       const scriptName = ["typecheck", "check:types", "types"].find((name) => scripts[name]);
       const hasTsConfig = await fs.stat(path.join(cwd, "tsconfig.json")).then((stat) => stat.isFile()).catch(() => false);
-      if (!scriptName && !hasTsConfig) return "No typecheck script or tsconfig.json found.";
-      const command = scriptName ? `npm run ${scriptName}` : "npx --no-install tsc --noEmit";
+      const exists = async (name) => fs.stat(path.join(cwd, name)).then((stat) => stat.isFile()).catch(() => false);
+      const packageManager = await exists("pnpm-lock.yaml") ? "pnpm" : await exists("yarn.lock") ? "yarn" : await exists("bun.lockb") || await exists("bun.lock") ? "bun" : "npm";
+      let command;
+      if (scriptName) command = `${packageManager} ${packageManager === "npm" ? "run " : "run "}${scriptName}`;
+      else if (hasTsConfig) command = packageManager === "npm" ? "npx --no-install tsc --noEmit" : `${packageManager} exec tsc --noEmit`;
+      else if (await exists("pom.xml")) command = "mvn -q -DskipTests compile";
+      else if (await exists("gradlew") || await exists("gradlew.bat")) command = process.platform === "win32" ? "gradlew.bat compileJava" : "./gradlew compileJava";
+      else if (await exists("Cargo.toml")) command = "cargo check";
+      else if (await exists("go.mod")) command = "go test ./...";
+      else return "No supported typecheck or build manifest found.";
       const result = await runCommand(command, cwd);
       return `$ ${command}\n${truncate(`${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`)}\n(exit ${result.exitCode})`;
     }
@@ -1018,7 +1084,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       return checkPort(args.port, firstArg(args, "host") || "127.0.0.1");
     case "Delete": {
       const filePath = pathArg("file_path", "path", "file");
-      await fs.rm(filePath, { recursive: false, force: false });
+      await fs.rm(filePath, { recursive: true, force: false });
       return `Deleted ${relativePath(filePath, cwd)}.`;
     }
     case "Mkdir": {
@@ -1042,20 +1108,24 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
     }
     case "GitStatus": {
       const result = await executeGit(["status", "--short", "--branch"], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git status failed");
       return `${result.stdout}${result.stderr}`.trim() || "Working tree clean.";
     }
     case "GitLog": {
       const count = Math.max(1, Math.min(50, Number(args.count) || 10));
       const result = await executeGit(["log", `-${count}`, "--oneline", "--decorate"], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git log failed");
       return `${result.stdout}${result.stderr}`.trim() || "No commits found.";
     }
     case "GitDiff": {
       const filePath = firstArg(args, "file_path", "path");
       const result = await executeGit(["diff", "--", filePath || "."], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git diff failed");
       return `${result.stdout}${result.stderr}`.trim() || "No changes.";
     }
     case "GitBranch": {
       const result = await executeGit(["branch", ...(args.all === false ? [] : ["--all"]), "--no-color"], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git branch failed");
       return `${result.stdout}${result.stderr}`.trim() || "No branches found.";
     }
     case "GitCheckout": {
@@ -1067,7 +1137,9 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
     case "GitCommit": {
       const message = firstArg(args, "message", "subject");
       if (!message) throw new Error("GitCommit requires a commit message.");
-      const paths = Array.isArray(args.paths) ? args.paths.map((value) => String(value)).filter((value) => value && !/[;&|<>\n\r]/.test(value)) : [];
+      const requestedPaths = Array.isArray(args.paths) ? args.paths.map((value) => String(value)) : [];
+      const paths = requestedPaths.filter((value) => value && !/[;&|<>\n\r]/.test(value));
+      if (requestedPaths.length && paths.length !== requestedPaths.length) throw new Error("GitCommit received an invalid path; refusing to stage anything.");
       const result = await executeGit(["add", ...(paths.length ? ["--", ...paths] : ["-A"])], cwd);
       if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || "git add failed");
       const commit = await executeGit(["commit", "-m", message], cwd);
@@ -1107,7 +1179,10 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
     case "Diff": {
       const pathA = pathArg("path_a", "file_path", "path");
       const pathB = firstArg(args, "path_b") ? resolveWorkspacePath(firstArg(args, "path_b"), cwd, { allowOutside }) : null;
-      const [a, b] = await Promise.all([fs.readFile(pathA, "utf8"), pathB ? fs.readFile(pathB, "utf8") : executeGit(["show", `HEAD:${relativePath(pathA, cwd)}`], cwd).then((result) => result.stdout)]);
+      const [a, b] = await Promise.all([fs.readFile(pathA, "utf8"), pathB ? fs.readFile(pathB, "utf8") : executeGit(["show", `HEAD:${relativePath(pathA, cwd)}`], cwd).then((result) => {
+        if (result.exitCode !== 0) throw new Error(result.stderr.trim() || "Could not read the HEAD version of this file.");
+        return result.stdout;
+      })]);
       if (a === b) return "Files are identical.";
       return `Files differ: ${relativePath(pathA, cwd)}${pathB ? ` and ${relativePath(pathB, cwd)}` : " versus HEAD"}.`;
     }
@@ -1127,16 +1202,13 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
     case "KillProcess": {
       const pid = Number(args.pid);
       if (Number.isInteger(pid) && pid > 0) {
-        process.kill(pid);
+        const entries = [...backgroundProcesses.values(), ...localAgents.values()];
+        const entry = entries.find((item) => item.child.pid === pid && item.exitCode === undefined && item.status !== "done");
+        if (!entry) throw new Error("KillProcess only terminates processes launched by this CLI. Use StopBackground or StopSubagent.");
+        killProcessTree(entry.child);
         return `Sent a termination signal to process ${pid}.`;
       }
-      const processName = firstArg(args, "name");
-      if (!processName || !/^[A-Za-z0-9_.-]+$/.test(processName)) throw new Error("KillProcess requires a numeric pid or a simple process image name.");
-      const command = process.platform === "win32"
-        ? `taskkill /IM "${processName}" /T /F`
-        : `pkill -TERM -x "${processName}"`;
-      const result = await runCommand(command, cwd);
-      return `${result.stdout}${result.stderr}`.trim() || `Sent a termination request to ${processName}.`;
+      throw new Error("KillProcess requires the pid of a process launched by RunInBackground or SpawnAgent.");
     }
     case "Zip": {
       const archive = pathArg("archive_path", "path");

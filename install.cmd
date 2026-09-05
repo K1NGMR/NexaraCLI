@@ -5,7 +5,7 @@ rem without silent background updates; update manually with `nexara update`.
 set "DISABLE_AUTO=0"
 if /I "%~1"=="/DisableAutoUpdate" set "DISABLE_AUTO=1"
 set "TEMP_DIR=%TEMP%\nexara-cli-%RANDOM%%RANDOM%"
-set "ZIP_FILE=%TEMP_DIR%.zip"
+set "PACKAGE_FILE=%TEMP_DIR%\nexara-cli.tgz"
 where node >nul 2>nul
 if errorlevel 1 (
   echo Node.js 22+ is required. Install it from https://nodejs.org/ first.
@@ -19,18 +19,12 @@ if %NODE_MAJOR% LSS 22 (
   exit /b 1
 )
 mkdir "%TEMP_DIR%" >nul 2>nul
-curl -fL "https://github.com/K1NGMR/NexaraCLI/archive/refs/heads/main.zip" -o "%ZIP_FILE%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$h = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'nexara-cli-installer' }; $r = Invoke-RestMethod -Uri 'https://api.github.com/repos/K1NGMR/NexaraCLI/releases/latest' -Headers $h; if ($r.draft -or $r.prerelease -or $r.tag_name -notmatch '^v\d+\.\d+\.\d+$') { exit 2 }; $v = $r.tag_name.Substring(1); $a = @($r.assets) | ? { $_.name -eq ('nexara-cli-' + $v + '.tgz') } | select -First 1; $m = @($r.assets) | ? { $_.name -eq 'checksums.json' } | select -First 1; if (-not $a -or -not $m) { exit 3 }; Invoke-WebRequest -Uri $a.browser_download_url -Headers $h -OutFile '%PACKAGE_FILE%'; $j = Invoke-RestMethod -Uri $m.browser_download_url -Headers $h; $p = $j.files.psobject.Properties[('nexara-cli-' + $v + '.tgz')]; if ($j.version -ne $v -or [string]$p.Value -notmatch '^[0-9a-fA-F]{64}$') { exit 4 }; if ((Get-FileHash -LiteralPath '%PACKAGE_FILE%' -Algorithm SHA256).Hash -ne [string]$p.Value) { exit 5 }"
 if errorlevel 1 goto :fail
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%ZIP_FILE%' -DestinationPath '%TEMP_DIR%' -Force"
-if errorlevel 1 goto :fail
-for /d %%D in ("%TEMP_DIR%\NexaraCLI-*") do set "ROOT=%%D"
-if not exist "%ROOT%\package.json" goto :fail
 for /f "delims=" %%R in ('npm root --global') do set "GLOBAL_ROOT=%%R"
 for /f "delims=" %%P in ('npm prefix --global') do set "GLOBAL_PREFIX=%%P"
 if not exist "%GLOBAL_ROOT%" goto :fail
-rmdir /s /q "%GLOBAL_ROOT%\nexara-cli" >nul 2>nul
-del /q "%GLOBAL_PREFIX%\nexara" "%GLOBAL_PREFIX%\nexara.cmd" "%GLOBAL_PREFIX%\nexara.ps1" >nul 2>nul
-npm install --global "%ROOT%" --no-fund --no-audit --force
+npm install --global "%PACKAGE_FILE%" --no-fund --no-audit --force
 if errorlevel 1 goto :fail
 if not exist "%GLOBAL_ROOT%\nexara-cli\bin\nexara.js" goto :fail
 echo Installed. Run: nexara
@@ -51,6 +45,6 @@ echo Nexara CLI installation failed.
 set "EXIT_CODE=1"
 :cleanup
 rmdir /s /q "%TEMP_DIR%" >nul 2>nul
-del /q "%ZIP_FILE%" >nul 2>nul
+del /q "%PACKAGE_FILE%" >nul 2>nul
 if not defined EXIT_CODE set "EXIT_CODE=0"
 exit /b %EXIT_CODE%

@@ -27,8 +27,27 @@ function waitExit(child, ms) {
 function hasCommand(command) {
   return new Promise((resolve) => {
     const probe = spawn(command, ["-version"], { stdio: "ignore", windowsHide: true });
-    probe.once("error", () => resolve(false));
-    probe.once("exit", () => resolve(true));
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    // A binary that exists but hangs on -version (an unexpected PATH match,
+    // a wrapper script waiting on stdin) previously had no way to end --
+    // pressing M would await this forever with no feedback and no way to
+    // cancel, before recording ever had a chance to start.
+    const timer = setTimeout(() => {
+      try {
+        probe.kill();
+      } catch {
+        // Already gone.
+      }
+      finish(false);
+    }, 2_000);
+    probe.once("error", () => finish(false));
+    probe.once("exit", () => finish(true));
   });
 }
 

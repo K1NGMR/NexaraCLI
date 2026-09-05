@@ -1,0 +1,35 @@
+name: Release CLI
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm pack --silent
+      - name: Create checksum manifest
+        shell: bash
+        run: |
+          package_file="$(find . -maxdepth 1 -type f -name 'nexara-cli-*.tgz' -print -quit)"
+          package_name="${package_file#./}"
+          version="${GITHUB_REF_NAME#v}"
+          hash="$(sha256sum "$package_file" | cut -d ' ' -f 1)"
+          node -e "require('fs').writeFileSync('checksums.json', JSON.stringify({version: process.argv[1], files: {[process.argv[2]]: process.argv[3]}}, null, 2) + '\\n')" "$version" "$package_name" "$hash"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            nexara-cli-*.tgz
+            checksums.json

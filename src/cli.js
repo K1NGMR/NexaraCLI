@@ -37,7 +37,7 @@ const MAX_FILE_BYTES = 15 * 1024 * 1024;
 // of them could ride in the same request -- several max-size attachments
 // together could still blow well past a serverless request-body limit, and
 // the whole chat request would fail with no clear explanation why.
-const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 12 * 1024 * 1024;
 const MAX_ATTACHMENTS = 8;
 const IMAGE_TYPES = new Map([
   [".png", "image/png"],
@@ -2172,6 +2172,10 @@ function checkAttachmentBudget(files) {
   if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
     throw new Error(`Attachments total ${Math.round(totalBytes / 1024 / 1024)} MB, over the ${Math.round(MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024)} MB combined limit per message. Remove one or send them in separate messages.`);
   }
+  const encodedBytes = Math.ceil(totalBytes * 4 / 3);
+  if (encodedBytes > 16 * 1024 * 1024) {
+    throw new Error("Attachments exceed the encoded request limit. Remove an attachment or send them in separate messages.");
+  }
 }
 
 async function requireLogin(auth, config) {
@@ -2302,8 +2306,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
   state.maxBudget ??= state.config.maxBudget;
   const message = userMessage(trimmed, files);
   const machine = state.outputFormat === "stream-json";
-  const quiet = Boolean(state.quiet || state.outputFormat === "json" || machine);
-  if (!quiet && !alreadyRendered) {
+  // `--print` is a non-interactive text mode, not a silent mode. Keep the
+  // transcript chrome suppressed by oneShot, but always render the final
+  // assistant text so piping `nexara --print ...` is useful.
+  const quiet = Boolean((state.quiet && !state.printText) || state.outputFormat === "json" || machine);
+  if (!quiet && !alreadyRendered && !state.printText) {
     // Commit the user message before any network/thread setup. This keeps the
     // submitted prompt visible even when auth, thread creation, or the model
     // takes a moment, and prevents the composer redraw from hiding it.
@@ -2535,7 +2542,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       const reasoningPart = assistant.parts?.find((part) => part.type === "reasoning");
       assistant.parts = [...(reasoningPart ? [reasoningPart] : []), { type: "text", text: responseText }];
     }
-    if ((responseText.trim() || String(state.thinkingText || "").trim()) && state.outputFormat !== "json" && !machine) {
+    if ((responseText.trim() || String(state.thinkingText || "").trim()) && state.outputFormat !== "json" && !machine && (!quiet || state.printText)) {
       const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: false }));
       const reasoning = String(state.thinkingText || "").trim();
       if (reasoning && !thinkingRendered) {
@@ -2604,7 +2611,19 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       await persistLocalSession(state, conversation);
       break;
     }
-    conversation.push(assistant);
+    const assistantTurn = {
+      ...assistant,
+      parts: [
+        ...(assistant.parts || []),
+        ...calls.map((call) => ({
+          type: `tool-${call.name}`,
+          toolCallId: call.toolCallId || crypto.randomUUID(),
+          state: "input-available",
+          input: call.arguments || {},
+        })),
+      ],
+    };
+    conversation.push(assistantTurn);
     await persistLocalSession(state, conversation);
     // runClientTool prints directly (printToolResult, approval prompts,
     // ask_question) with no clear/mount of its own around most of that --
@@ -2622,12 +2641,13 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       const resultText = await runClientTool(state, call, controller.signal);
       (state.scheduleMountComposer || state.mountComposer)?.();
       outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
-      const safeResultText = escapeToolResultBody(resultText);
-      conversation.push(userMessage(
-        call.toolCallId
-          ? `<tool_result name="${call.name}" tool_call_id="${call.toolCallId}">\n${safeResultText}\n</tool_result>`
-          : `<tool_result name="${call.name}">\n${safeResultText}\n</tool_result>`,
-      ));
+      const toolPart = assistantTurn.parts.find(
+        (part) => part.type === `tool-${call.name}` && part.toolCallId === (call.toolCallId || part.toolCallId),
+      );
+      if (toolPart) {
+        toolPart.state = "output-available";
+        toolPart.output = resultText;
+      }
       await persistLocalSession(state, conversation);
     }
     // The tool phase is over -- restore whatever Ctrl+C should cancel next
@@ -3777,7 +3797,8 @@ async function oneShot(config, auth, options, configPath) {
     sessionCreatedAt: null,
     pendingImages: images,
     todos: [],
-    quiet: Boolean(options.print),
+     quiet: Boolean(options.print),
+     printText: Boolean(options.print && options.outputFormat === "text"),
     outputFormat: options.outputFormat,
     maxTurns: options.maxTurns || config.maxTurns || 100,
     maxBudget: options.maxBudget || config.maxBudget || null,

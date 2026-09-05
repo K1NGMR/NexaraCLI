@@ -5,15 +5,30 @@ import { CONFIG_DIR } from "./config.js";
 
 export const SESSION_DIR = path.join(CONFIG_DIR, "sessions");
 
+function sessionDirectory() {
+  const override = String(process.env.NEXARA_SESSION_DIR || "").trim();
+  return override ? path.resolve(override) : SESSION_DIR;
+}
+
 function sessionFile(threadId) {
   const value = String(threadId || "").trim();
   if (!value || !/^[a-zA-Z0-9_-]+$/.test(value)) return null;
-  return path.join(SESSION_DIR, `${value}.json`);
+  return path.join(sessionDirectory(), `${value}.json`);
 }
 
 async function protect(filePath) {
   if (process.platform !== "win32") {
     await fs.chmod(filePath, 0o600).catch(() => {});
+  }
+}
+
+async function quarantine(filePath) {
+  try {
+    const quarantinePath = `${filePath}.corrupt-${Date.now()}`;
+    await fs.rename(filePath, quarantinePath);
+    await protect(quarantinePath);
+  } catch {
+    // A broken session must never prevent the CLI from starting.
   }
 }
 
@@ -43,7 +58,7 @@ export async function saveLocalSession({
 }) {
   const filePath = sessionFile(threadId);
   if (!filePath) return null;
-  await fs.mkdir(SESSION_DIR, { recursive: true });
+  await fs.mkdir(sessionDirectory(), { recursive: true });
   const now = new Date().toISOString();
   const record = {
     version: 1,
@@ -71,7 +86,9 @@ export async function saveLocalSession({
 // record WITH an accountId that does not match the current one is always
 // excluded: that is the actual cross-account leak this guards against.
 function ownedBy(record, accountId) {
-  return !record.accountId || !accountId || record.accountId === accountId;
+  // Anonymous/legacy records are intentionally not readable after the
+  // account-scoping migration. Missing ownership must not mean public.
+  return Boolean(record.accountId && accountId && record.accountId === accountId);
 }
 
 export async function loadLocalSession(threadId, accountId = null) {
@@ -79,9 +96,14 @@ export async function loadLocalSession(threadId, accountId = null) {
   if (!filePath) return null;
   try {
     const record = JSON.parse(await fs.readFile(filePath, "utf8"));
-    if (!validSession(record) || !ownedBy(record, accountId)) return null;
+    if (!validSession(record)) {
+      await quarantine(filePath);
+      return null;
+    }
+    if (!ownedBy(record, accountId)) return null;
     return record;
-  } catch {
+  } catch (error) {
+    if (error instanceof SyntaxError) await quarantine(filePath);
     return null;
   }
 }
@@ -89,7 +111,7 @@ export async function loadLocalSession(threadId, accountId = null) {
 export async function listLocalSessions(limit = 50, accountId = null) {
   let names;
   try {
-    names = await fs.readdir(SESSION_DIR);
+    names = await fs.readdir(sessionDirectory());
   } catch {
     return [];
   }
@@ -98,9 +120,10 @@ export async function listLocalSessions(limit = 50, accountId = null) {
       .filter((name) => name.endsWith(".json"))
       .map(async (name) => {
         try {
-          const record = JSON.parse(await fs.readFile(path.join(SESSION_DIR, name), "utf8"));
+          const record = JSON.parse(await fs.readFile(path.join(sessionDirectory(), name), "utf8"));
           return validSession(record) && ownedBy(record, accountId) ? record : null;
-        } catch {
+        } catch (error) {
+          if (error instanceof SyntaxError) await quarantine(path.join(sessionDirectory(), name));
           return null;
         }
       }),

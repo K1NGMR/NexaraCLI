@@ -10,7 +10,7 @@ const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const RETRY_INTERVAL_MS = 30 * 60 * 1000;
 const UPDATE_STATE_FILE = path.join(CONFIG_DIR, "update.json");
 const REPOSITORY = "K1NGMR/NexaraCLI";
-const REMOTE_PACKAGE_URL = `https://raw.githubusercontent.com/${REPOSITORY}/main/package.json`;
+const REMOTE_RELEASE_URL = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const WORKER_FILE = fileURLToPath(new URL("./update-worker.ps1", import.meta.url));
 
 const CURRENT_VERSION = JSON.parse(
@@ -51,16 +51,17 @@ async function writeState(patch) {
 }
 
 async function fetchRemoteVersion() {
-  const response = await fetch(`${REMOTE_PACKAGE_URL}?t=${Date.now()}`, {
-    headers: { Accept: "application/json", "Cache-Control": "no-cache" },
+  const response = await fetch(REMOTE_RELEASE_URL, {
+    headers: { Accept: "application/vnd.github+json", "Cache-Control": "no-cache" },
     signal: AbortSignal.timeout(3500),
   });
   if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-  const packageJson = await response.json();
-  if (!/^\d+\.\d+\.\d+$/.test(String(packageJson?.version || ""))) {
+  const release = await response.json();
+  const version = String(release?.tag_name || "").replace(/^v/, "");
+  if (!/^\d+\.\d+\.\d+$/.test(version) || release?.draft || release?.prerelease) {
     throw new Error("GitHub returned an invalid stable CLI version");
   }
-  return packageJson.version;
+  return version;
 }
 
 function launchWindowsUpdater(targetVersion, stateFile) {

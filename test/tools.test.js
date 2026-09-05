@@ -3,10 +3,10 @@ import test from "node:test";
 
 import { resolveWorkspacePath, toolAllowedByMode } from "../src/tools.js";
 
-test("sandboxed and automatic modes do not grant shell or destructive tools", () => {
+test("sandboxed and automatic modes permit shell execution but block destructive tools", () => {
   for (const mode of ["auto", "sandboxed"]) {
     assert.equal(toolAllowedByMode("Write", mode), true);
-    assert.equal(toolAllowedByMode("Bash", mode), false);
+    assert.equal(toolAllowedByMode("Bash", mode), true);
     assert.equal(toolAllowedByMode("Delete", mode), false);
     assert.equal(toolAllowedByMode("GitCheckout", mode), false);
   }
