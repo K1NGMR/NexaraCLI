@@ -2748,14 +2748,14 @@ async function handleSlash(state, line) {
           state.config = { ...state.config, selectedModel: choice.model };
           notice(`Using ${color.cream(modelLabel(choice.model))} for this session only.`);
         } else {
-          state.config = saveConfig({ selectedModel: choice.model });
+          state.config = { ...state.config, ...saveConfig({ selectedModel: choice.model }) };
           notice(`Default model set to ${color.cream(modelLabel(choice.model))}.`);
         }
         return true;
       }
       const model = resolveModel(argument);
       if (!model) { console.log(color.red(`No exact model match for “${argument}”.`)); printModels(state.config.selectedModel, argument); return true; }
-      state.config = saveConfig({ selectedModel: model });
+      state.config = { ...state.config, ...saveConfig({ selectedModel: model }) };
       notice(`Model switched to ${color.cream(modelLabel(model))}.`);
       return true;
     }
@@ -2771,7 +2771,7 @@ async function handleSlash(state, line) {
         console.log(color.red("Unknown effort. Choose low, medium, high, xhigh (Extra High), or max."));
         return true;
       }
-      state.config = saveConfig({ selectedReasoningEffort: value });
+      state.config = { ...state.config, ...saveConfig({ selectedReasoningEffort: value }) };
       notice(`Reasoning effort set to ${color.cream(REASONING_EFFORT_LABELS[value])}.`);
       printEffortEstimates(state.config.selectedModel, contextOf(state.messages) + 1_600);
       return true;
@@ -2794,7 +2794,7 @@ async function handleSlash(state, line) {
       state.messages = [];
       state.pendingImages = [];
       state.todos = [];
-      state.config = saveConfig({ lastThreadId: null });
+      state.config = { ...state.config, ...saveConfig({ lastThreadId: null }) };
       notice("Started a fresh conversation.");
       return true;
     case "/clear":
@@ -2802,7 +2802,7 @@ async function handleSlash(state, line) {
       state.messages = [];
       state.pendingImages = [];
       state.todos = [];
-      state.config = saveConfig({ lastThreadId: null });
+      state.config = { ...state.config, ...saveConfig({ lastThreadId: null }) };
       if (input.isTTY && output.isTTY && process.env.NEXARA_NO_CLEAR !== "1") {
         clearTerminalForSession();
         await printBanner(state.config, await state.auth.user(), { resumed: false });
@@ -2819,9 +2819,11 @@ async function handleSlash(state, line) {
       state.messages = loaded.messages;
       state.sessionTitle = loaded.thread.title || "New chat";
       state.sessionCreatedAt = loaded.createdAt || loaded.thread.created_at || new Date().toISOString();
-      if (loaded.cwd) state.cwd = loaded.cwd;
+      // A saved transcript may have been created in another project. Keep
+      // this process's trusted launch workspace; restoring a historical cwd
+      // would silently redirect subsequent tools without a new trust check.
       state.todos = [];
-      state.config = saveConfig({ lastThreadId: state.threadId });
+      state.config = { ...state.config, ...saveConfig({ lastThreadId: state.threadId }) };
       await persistLocalSession(state);
       if (input.isTTY && output.isTTY && process.env.NEXARA_NO_CLEAR !== "1") {
         clearTerminalForSession();
@@ -2908,7 +2910,7 @@ async function handleSlash(state, line) {
       if (!argument) {
         const mode = await (state.withEditorPaused ? state.withEditorPaused(() => selectPermissionInteractive(effectivePermissionMode(state), state.cwd)) : selectPermissionInteractive(effectivePermissionMode(state), state.cwd));
         if (!mode) return true;
-        state.config = saveConfig({ permissionMode: mode });
+        state.config = { ...state.config, ...saveConfig({ permissionMode: mode }) };
         notice(`Permission mode set to ${color.cream(permissionModeLabel(mode))}.`);
         return true;
       }
@@ -2917,7 +2919,7 @@ async function handleSlash(state, line) {
         console.log(color.red("Unknown permission mode. Choose Always ask, Approve for me, Sandboxed, or Full access."));
         return true;
       }
-      state.config = saveConfig({ permissionMode: mode });
+      state.config = { ...state.config, ...saveConfig({ permissionMode: mode }) };
       notice(`Permission mode set to ${color.cream(permissionModeLabel(mode))}.`);
       return true;
     }
