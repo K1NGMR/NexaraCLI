@@ -3023,7 +3023,7 @@ async function handleSlash(state, line) {
     case "/doctor": {
       const checks = [];
       const nodeVersion = process.versions.node.split(".").map(Number);
-      checks.push([nodeVersion[0] >= 20, `Node.js ${process.versions.node} (requires 20+)`]);
+      checks.push([nodeVersion[0] >= 22, `Node.js ${process.versions.node} (requires 22+)`]);
       checks.push([Boolean(state.cwd && await fs.stat(state.cwd).catch(() => null)), `Workspace ${displayPath(state.cwd)}`]);
       checks.push([Boolean(state.config.appUrl), `API endpoint ${state.config.appUrl || "missing"}`]);
       checks.push([Boolean(state.config.noSessionPersistence || state.threadId || await fs.stat(SESSION_DIR).catch(() => null)), state.config.noSessionPersistence ? "Local session storage disabled by flag" : `Local sessions ${SESSION_DIR}`]);
