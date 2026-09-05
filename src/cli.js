@@ -723,7 +723,11 @@ async function selectQuestionInteractive(question) {
   };
   const render = () => {
     ensureVisible();
-    const width = Math.max(64, terminalWidth());
+    // Never demand a wider box than the real terminal has -- a floor here
+    // forced lines to physically wrap in a narrower window, and finish()'s
+    // cleanup below moves by LOGICAL row count, so those extra wrapped rows
+    // desynced it and left part of the box behind on screen after closing.
+    const width = terminalWidth();
     const inner = width - 7;
     const hint = question.multiSelect
       ? "↑/↓ or numpad 8/2 move · Space toggle · Enter select · Esc cancel"
@@ -1816,9 +1820,15 @@ async function selectPermissionInteractive(currentMode, cwd = process.cwd()) {
   };
   const render = () => {
     ensureVisible();
-    const width = Math.max(64, terminalWidth());
+    // Never demand a wider box than the real terminal has -- a floor here
+    // forced lines to physically wrap in a narrower window, and finish()'s
+    // cleanup below moves by LOGICAL row count, so those extra wrapped rows
+    // desynced it and left part of the box behind on screen after closing.
+    const width = terminalWidth();
     const visible = PERMISSION_OPTIONS.slice(scrollTop, scrollTop + viewport);
-    const project = shorten(cwd, Math.max(28, width - 42));
+    // Same reasoning applies to this floor: it must yield to width rather
+    // than force the title line longer than the box can actually hold.
+    const project = shorten(cwd, Math.max(0, width - 42));
     const title = `Permission mode · project sandbox: ${project}`;
     const hint = "↑/↓ or numpad 8/2 browse · Enter select · Esc cancel";
     const lines = [
@@ -1912,7 +1922,13 @@ async function selectModelInteractive(selected) {
   };
   const render = () => {
     ensureVisible();
-    const width = Math.max(60, terminalWidth());
+    // Never demand a wider box than the real terminal has -- a floor here
+    // forced lines to physically wrap in a narrower window, and finish()'s
+    // cleanup below moves by LOGICAL row count, so those extra wrapped rows
+    // desynced it and left part of the box (its top, since the cleanup then
+    // moves up too few rows from the bottom) behind on screen after closing.
+    // This is the exact "leftover model catalog" artifact.
+    const width = terminalWidth();
     const visible = entries.slice(scrollTop, scrollTop + viewport);
     const lines = [
       `  ${color.coral("╭")}${color.coral("─".repeat(width - 4))}${color.coral("╮")}`,
