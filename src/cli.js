@@ -2365,7 +2365,17 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     // usable, so a second line can be queued without disturbing the stream.
     state.mountComposer?.();
   }
-  await ensureThread(state, trimmed.replace(/\s+/g, " "));
+  // Thread/auth setup happens before the stream activity line exists. Keep
+  // the fixed footer honest during that phase; otherwise a slow or failed
+  // session request looks like a dead composer after the user submits.
+  setComposerActivity(state, "connecting");
+  try {
+    await ensureThread(state, trimmed.replace(/\s+/g, " "));
+  } catch (error) {
+    setComposerActivity(state, null);
+    throw error;
+  }
+  setComposerActivity(state, null);
   const conversation = [...state.messages, message];
   // Alias state.messages to this same array now, not just on a clean finish.
   // Every push onto `conversation` for the rest of this turn (assistant
