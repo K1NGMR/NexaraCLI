@@ -3971,6 +3971,10 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (!(await confirmWorkspace(nextConfig))) return;
   await ensureSignedIn(nextConfig, auth, options.google, options.qr);
+  // Authentication can render its own picker and status lines inside the
+  // alternate screen. Start the actual chat home on a clean frame so the
+  // sign-in UI never remains above the Nexara transcript.
+  clearTerminalForSession();
   if (options.continue) {
     const state = { config: nextConfig, auth, configPath, threadId: null, messages: [], sessionTitle: null, sessionCreatedAt: null, pendingImages: [], quiet: false };
     const id = nextConfig.lastThreadId;
