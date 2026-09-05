@@ -1261,7 +1261,18 @@ function printNewConversationIntro() {
     ["/threads", "Browse saved sessions", "ctrl+p s"],
   ];
   console.log();
-  console.log(center(`${color.coral("✦")} ${color.cream("Nexara")}`));
+  // The upstream TUI uses a compact block logo centered in the home route,
+  // rather than a banner pinned to the top-left. Keep that composition while
+  // rebranding the mark for Nexara.
+  const logo = [
+    "███╗   ██╗███████╗██╗  ██╗ █████╗ ██████╗  █████╗",
+    "████╗  ██║██╔════╝╚██╗██╔╝██╔══██╗██╔══██╗██╔══██╗",
+    "██╔██╗ ██║█████╗   ╚███╔╝ ███████║██████╔╝███████║",
+    "██║╚██╗██║██╔══╝   ██╔██╗ ██╔══██║██╔══██╗██╔══██║",
+    "██║ ╚████║███████╗██╔╝ ██╗██║  ██║██║  ██║██║  ██║",
+    "╚═╝  ╚══╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
+  ];
+  logo.forEach((line, index) => console.log(center(index === 0 ? color.coral(line) : color.cream(line))));
   console.log(center(color.muted("the open source coding agent")));
   console.log();
   commandRows.forEach(([command, description, shortcut]) => {
@@ -3559,7 +3570,7 @@ async function interactive(config, auth, configPath, existingState) {
 
   function fixedComposerFooter() {
     const model = color.muted(modelLabel(state.config.selectedModel));
-    const details = state.busy ? color.muted("Compute limit · Ctrl+C cancels") : color.muted("Compute limit · / commands");
+    const details = state.busy ? color.muted("· working · Ctrl+C cancels") : color.muted("· / commands · Ctrl+P actions");
     return `${model} ${details}`;
   }
 
@@ -3567,7 +3578,7 @@ async function interactive(config, auth, configPath, existingState) {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
     const left = shorten(`  ${fixedComposerStatus()}  ${fixedComposerFooter()}`, Math.max(8, width - 2));
-    const end = color.muted("× End session");
+    const end = color.muted(`Nexara CLI ${CURRENT_VERSION}`);
     const availableEnd = Math.max(0, width - visibleLength(left) - 2);
     const fittedEnd = availableEnd ? shorten(end, availableEnd) : "";
     const gap = Math.max(2, width - visibleLength(left) - visibleLength(fittedEnd));
