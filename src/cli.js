@@ -803,6 +803,7 @@ function installEscapeExit() {
       // visible. Since process.exit skips the interactive cleanup finally
       // block, explicitly restore terminal mouse/cursor state before leaving.
       output.write("\r\n\u001b[?1006l\u001b[?1000l\u001b[?25h");
+      restoreTerminalScreen();
       // process.exit also skips whatever would normally stop RunInBackground
       // commands and subagents on exit -- left running, they hold ports and
       // files that break the next `nexara` invocation in this workspace.
@@ -849,6 +850,24 @@ function terminalWidth() {
   // Leave a two-column safety margin. Terminals wrap a line written exactly
   // to the last column, which turns in-place picker redraws into new rows.
   return Math.max(20, columns - 2);
+}
+
+let alternateScreenActive = false;
+
+function enterTerminalScreen() {
+  if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ALT_SCREEN === "1") return;
+  if (alternateScreenActive) return;
+  // OpenCode owns a separate screen while its TUI is running. This hides the
+  // shell's existing output without destroying it, so it can be restored on
+  // exit instead of leaving the chat mixed into the terminal scrollback.
+  output.write("\u001b[?1049h\u001b[2J\u001b[H\u001b[?25l");
+  alternateScreenActive = true;
+}
+
+function restoreTerminalScreen() {
+  if (!alternateScreenActive) return;
+  alternateScreenActive = false;
+  output.write("\u001b[?1006l\u001b[?1000l\u001b[?2004l\u001b[?1004l\u001b[?1049l\u001b[?25h\u001b[0m");
 }
 
 function clearTerminalForSession() {
@@ -3931,7 +3950,10 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === "whoami" && options.prompt.length === 1) { const user = await auth.user(); console.log(user?.email || "Not signed in."); return; }
   const startsInteractive = !(options.print || options.prompt.length > 0 || options.images.length > 0 || (options.continue && options.prompt.length > 0));
-  if (startsInteractive || (command === "login" && options.prompt.length === 1)) clearTerminalForSession();
+  if (startsInteractive || (command === "login" && options.prompt.length === 1)) {
+    enterTerminalScreen();
+    clearTerminalForSession();
+  }
   if (!startsInteractive) {
     await ensureSignedIn(nextConfig, auth, options.google, options.qr);
     await oneShot(nextConfig, auth, { ...options, prompt: options.prompt[0] === "login" ? [] : options.prompt }, configPath);
@@ -3955,6 +3977,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   await interactive(nextConfig, auth, configPath);
   } finally {
+    restoreTerminalScreen();
     removeEscapeExit();
   }
 }
