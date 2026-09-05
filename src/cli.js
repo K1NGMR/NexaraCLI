@@ -1220,17 +1220,9 @@ function printNewConversationIntro() {
     return `${" ".repeat(padding)}${value}`;
   };
   console.log();
-  // OpenCode's Home route uses a compact two-column four-row logo. Keep the
-  // same footprint and rendering rhythm while rebranding the wordmark.
-  const logo = [
-    ["█▀▀█ █▀▀▀ █__█", "█▀▀█ █▀▀█ █▀▀█"],
-    ["█__█ █___ ▀██▀", "█__█ █__█ █___"],
-    ["█^^^ █^^^ █^^█", "█▀▀▀ █▀▀▀ █^^^"],
-    ["▀▀▀▀ ▀▀▀▀ ▀__▀", "▀___ █__█ ▀___"],
-  ];
-  logo.forEach(([left, right]) => {
-    console.log(center(`${color.muted(left)} ${color.cream(right)}`));
-  });
+  // Keep the OpenCode home composition, but use a legible Nexara label
+  // instead of the decorative block-glyph wordmark.
+  console.log(center(color.cream("Nexara")));
   console.log(center(color.muted("the open source coding agent")));
   console.log();
   console.log(center(color.dim('Ask anything… "Fix a TODO in the codebase"')));
