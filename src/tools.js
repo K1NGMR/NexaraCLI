@@ -928,15 +928,36 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       return lines.join("\n");
     }
     case "DeadCodeScan": {
+      // Every matching file's full content is held in memory at once to
+      // build the corpus (then joined into a second, duplicate copy) --
+      // with no cap beyond the per-file read limit, a large project could
+      // approach a gigabyte of held text and crash the process. Stop
+      // accumulating once the corpus is already big enough to be a
+      // reasonable signal; a project this large needs a real dead-code tool
+      // anyway, and a partial scan beats an OOM crash.
+      const MAX_DEAD_CODE_CORPUS_BYTES = 40_000_000;
       const files = await sourceFiles(cwd, firstArg(args, "directory") || ".");
       const all = [];
-      for (const file of files) all.push(await readCodeFile(file));
-      const corpus = all.filter(Boolean).join("\n");
-      const unused = files.filter((file) => {
+      let corpusBytes = 0;
+      let scannedCount = 0;
+      for (const file of files) {
+        if (corpusBytes >= MAX_DEAD_CODE_CORPUS_BYTES) break;
+        const content = await readCodeFile(file);
+        scannedCount += 1;
+        if (!content) continue;
+        all.push(content);
+        corpusBytes += content.length;
+      }
+      const corpus = all.join("\n");
+      const partial = scannedCount < files.length;
+      const unused = files.slice(0, scannedCount).filter((file) => {
         const base = path.basename(file, path.extname(file));
         return base.length > 2 && (corpus.match(new RegExp(`\\b${escapedRegExp(base)}\\b`, "g")) || []).length <= 1;
       });
-      return unused.map((file) => relativePath(file, cwd)).join("\n") || "No likely unused files found.";
+      const summary = unused.map((file) => relativePath(file, cwd)).join("\n") || "No likely unused files found.";
+      return partial
+        ? `${summary}\n\n(Partial scan: ${scannedCount}/${files.length} files -- the project is large enough that results are a hint, not exhaustive.)`
+        : summary;
     }
     case "TypeCheck": {
       const packagePath = path.join(cwd, "package.json");

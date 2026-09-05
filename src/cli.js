@@ -2389,6 +2389,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     const stopComposerAnimation = startComposerActivityAnimation(state);
     onStart?.();
     const serverArtifacts = [];
+    // A stream reconnect (see onRetry below) resends the conversation and
+    // can replay tool-result events for calls the model already got a
+    // result for on the previous, dropped attempt -- without this, the same
+    // artifact (e.g. a generated image/PDF) could be saved to disk twice.
+    const seenServerArtifactKeys = new Set();
     const controller = new AbortController();
     const previousCancel = state.cancelCurrent;
     const cancel = () => controller.abort();
@@ -2447,6 +2452,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
           outputToolEvent(state, { type: "tool-call", name: call.name, input: call.arguments, toolCallId: call.toolCallId });
         },
         onToolResult: (result) => {
+          const artifactKey = result.toolCallId || `${result.name}:${typeof result.output === "string" ? result.output : JSON.stringify(result.output)}`;
+          if (seenServerArtifactKeys.has(artifactKey)) return;
+          seenServerArtifactKeys.add(artifactKey);
           serverArtifacts.push(result);
           state.clearComposer?.();
           if (!quiet && result.name !== "create_pdf" && result.name !== "create_image" && result.name !== "edit_image") {
@@ -2620,16 +2628,31 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     if (state.outputFormat === "json") continue;
   }
   if (!lastAssistant) return null;
-  const pendingCalls = lastAssistant.nativeCalls?.length ? lastAssistant.nativeCalls : (lastAssistant.nativeCall ? [lastAssistant.nativeCall] : []);
-  if (pendingCalls.length) {
+  // By this point any tool calls on lastAssistant already ran -- execution
+  // happens unconditionally within the same turn, before the loop's
+  // maxTurns check is re-evaluated -- so this branch means the model hasn't
+  // had a turn to react to their results yet, not that the calls themselves
+  // are still queued. The message used to say "X still pending", which read
+  // as the tool never having run and could tempt a retry of something that
+  // already executed (and, for a mutating tool, already took effect).
+  const lastToolCalls = lastAssistant.nativeCalls?.length ? lastAssistant.nativeCalls : (lastAssistant.nativeCall ? [lastAssistant.nativeCall] : []);
+  if (lastToolCalls.length) {
     // "Raise --max-turns" is a startup flag -- useless advice mid-REPL, since
     // the thread already persisted the pending call and just needs another
     // message to pick back up.
     const continueHint = state.interactive
       ? "Send another message (e.g. \"continue\") to keep going."
       : "Raise --max-turns to continue.";
-    const pendingNames = pendingCalls.map((entry) => entry.name).join(", ");
-    const messageText = `Paused after ${maxTurns} model turn${maxTurns === 1 ? "" : "s"} with ${pendingNames} still pending. ${continueHint}`;
+    const lastToolNames = lastToolCalls.map((entry) => entry.name).join(", ");
+    // A recognized local/ask_question call always runs unconditionally
+    // within its own turn (before maxTurns is re-checked) -- reaching turn
+    // exhaustion or a budget stop here means it already ran and the model
+    // just hasn't seen/replied to the result yet. An unrecognized name means
+    // the opposite: it was never executed at all (see runnableCalls above).
+    const allRecognized = lastToolCalls.every((entry) => CLI_LOCAL_TOOL_NAMES.has(entry.name) || entry.name === "ask_question");
+    const messageText = allRecognized
+      ? `Paused after ${maxTurns} model turn${maxTurns === 1 ? "" : "s"}. Its last tool call${lastToolCalls.length === 1 ? "" : "s"} (${lastToolNames}) already ran; the model hasn't replied to the result${lastToolCalls.length === 1 ? "" : "s"} yet. ${continueHint}`
+      : `Paused after ${maxTurns} model turn${maxTurns === 1 ? "" : "s"}. The model's last request (${lastToolNames}) is not a recognized tool and was not run. ${continueHint}`;
     if (!quiet) notice(messageText, "amber");
     outputToolEvent(state, { type: "turn-limit", message: messageText });
   }
@@ -2677,7 +2700,7 @@ async function handleSlash(state, line) {
     case "/models": printModels(state.config.selectedModel, argument); return true;
     case "/model": {
       if (!argument) {
-        const choice = await selectModelInteractive(state.config.selectedModel);
+        const choice = await (state.withEditorPaused ? state.withEditorPaused(() => selectModelInteractive(state.config.selectedModel)) : selectModelInteractive(state.config.selectedModel));
         if (!choice?.model) return true;
         if (choice.sessionOnly) {
           state.config = { ...state.config, selectedModel: choice.model };
@@ -2841,7 +2864,7 @@ async function handleSlash(state, line) {
         ["allow-commands", "allow-commands"],
       ]);
       if (!argument) {
-        const mode = await selectPermissionInteractive(effectivePermissionMode(state), state.cwd);
+        const mode = await (state.withEditorPaused ? state.withEditorPaused(() => selectPermissionInteractive(effectivePermissionMode(state), state.cwd)) : selectPermissionInteractive(effectivePermissionMode(state), state.cwd));
         if (!mode) return true;
         state.config = saveConfig({ permissionMode: mode });
         notice(`Permission mode set to ${color.cream(permissionModeLabel(mode))}.`);
@@ -3022,6 +3045,20 @@ async function interactive(config, auth, configPath, existingState) {
       crlfDelay: Infinity,
       terminal: false,
     });
+  // selectQuestionInteractive/selectPermissionInteractive/selectModelInteractive
+  // each install their OWN keypress listener on `input` rather than replacing
+  // this editor's -- pause it first so the same keystroke isn't handled
+  // twice (an Enter that selects a picker option no longer also submits or
+  // corrupts whatever is sitting in the composer underneath it).
+  const withEditorPaused = async (run) => {
+    rl.pause?.();
+    try {
+      return await run();
+    } finally {
+      rl.resume?.();
+    }
+  };
+  state.withEditorPaused = withEditorPaused;
   let questionActive = false;
   const askInComposer = async (message, options) => {
     questionActive = true;
@@ -3033,7 +3070,7 @@ async function interactive(config, auth, configPath, existingState) {
   };
   state.askApproval = async (message) => askInComposer(`\n  ${color.amber("! Approval required")}\n    ${message}`);
   state.askQuestion = async (message) => askInComposer(message);
-  state.askChoice = async (question) => selectQuestionInteractive(question);
+  state.askChoice = async (question) => withEditorPaused(() => selectQuestionInteractive(question));
 
   // Push-to-talk: press M at the prompt to start recording, press M again to
   // stop and transcribe. The transcript is appended to the current line.

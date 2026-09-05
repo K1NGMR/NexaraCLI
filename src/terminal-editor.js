@@ -11,13 +11,30 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   let closed = false;
   let questionResolver = null;
   let questionRejecter = null;
+  let stashedDraft = null;
+  const restoreDraft = () => {
+    if (!stashedDraft) return;
+    ({ line, cursor } = stashedDraft);
+    stashedDraft = null;
+  };
   let currentPrompt = "║ ❯ ";
   let rawBefore = false;
   let renderedRows = 1;
+  // A modal picker (question/permission/model) installs its OWN keypress
+  // listener on the same `input` stream rather than replacing this one --
+  // Node calls every registered listener for an event, so without this flag
+  // both this editor and the picker processed the SAME keystroke: Enter
+  // could submit/queue whatever was in the composer at the same instant it
+  // selected a picker option, and typing a picker's own hotkeys (letters,
+  // numpad digits) could repaint/edit the composer underneath it. Callers
+  // must pause() before opening a modal and resume() once it settles.
+  let suspended = false;
 
   const editor = {
     get line() { return line; },
     get closed() { return closed; },
+    pause() { suspended = true; },
+    resume() { suspended = false; },
     getCursorPos() { return { cols: currentPrompt.length + cursor, rows: 0 }; },
     setPrompt(value) {
       // Strip styling from the prompt and retain the visible glyphs only.
@@ -42,6 +59,15 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     },
     question(message) {
       renderMessage(message);
+      // A question (approval prompt, /model, etc.) can interrupt the user
+      // mid-draft -- there is only one line/cursor, so starting the question
+      // with whatever they had typed already mixed that draft into the
+      // question's answer, and submitting silently discarded it. Stash it
+      // and restore it once the question settles, so it comes back exactly
+      // as left instead of vanishing into (or corrupting) the answer.
+      stashedDraft = { line, cursor };
+      line = "";
+      cursor = 0;
       return new Promise((resolve, reject) => {
         questionResolver = resolve;
         questionRejecter = reject;
@@ -128,6 +154,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       const resolve = questionResolver;
       questionResolver = null;
       questionRejecter = null;
+      restoreDraft();
       resolve(value);
       render();
       return;
@@ -136,7 +163,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   }
 
   function onKeypress(str, key = {}) {
-    if (closed) return;
+    if (closed || suspended) return;
     const name = String(key.name || "").toLowerCase();
     const sequence = key.sequence || str || "";
     if (key.ctrl && name === "c") return;
