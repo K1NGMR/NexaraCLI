@@ -38,6 +38,22 @@ export function createAuth(config = loadConfig()) {
   let client;
   let session = config.session;
   let refreshPromise = null;
+  // A freshly constructed client (clientFor) has NO session attached until
+  // one of the client's own auth methods (setSession/signInWithPassword/
+  // verifyOtp/exchangeCodeForSession/refreshSession) runs on it -- that is a
+  // local/network call on the CLIENT object itself, separate from just
+  // holding a still-valid token string in this closure's `session` variable.
+  // Without this flag, refresh()'s "reuse a still-valid token" shortcut
+  // skipped restore() (and therefore setSession()) whenever the loaded
+  // config already had an unexpired access_token, leaving every request
+  // that goes through getClient().from(...) (createThread, listThreads,
+  // loadThread, ...) running with NO Authorization attached at all --
+  // auth.uid() resolves to NULL server-side, so every insert/select governed
+  // by a `auth.uid() = user_id` RLS policy failed. accessToken()/user()
+  // still "worked" because getUser(token) takes the token directly and
+  // doesn't depend on the client's attached session, which is why `whoami`
+  // succeeded while every actual chat/thread operation failed.
+  let sessionAttachedToClient = false;
 
   function getClient() {
     return (client ??= clientFor(config));
@@ -59,6 +75,7 @@ export function createAuth(config = loadConfig()) {
       return null;
     }
     session = data.session;
+    sessionAttachedToClient = true;
     saveConfig({ session });
     return session;
   }
@@ -67,6 +84,7 @@ export function createAuth(config = loadConfig()) {
     const { data, error } = await getClient().auth.signInWithPassword({ email, password });
     if (error || !data.session) throw new Error(error?.message || "Sign-in did not return a session.");
     session = data.session;
+    sessionAttachedToClient = true;
     saveConfig({ session });
     return data.user;
   }
@@ -127,6 +145,7 @@ export function createAuth(config = loadConfig()) {
       });
 
       session = verified.data.session;
+      sessionAttachedToClient = true;
       saveConfig({ session });
       return verified.data.user;
     }
@@ -203,6 +222,7 @@ export function createAuth(config = loadConfig()) {
           if (exchanged.error || !exchanged.data.session) throw new Error(exchanged.error?.message || "Google sign-in did not return a session.");
           callbackSession = exchanged.data.session;
           session = callbackSession;
+          sessionAttachedToClient = true;
           saveConfig({ session });
         } catch (error) {
           callbackError = error instanceof Error ? error : new Error(String(error));
@@ -276,10 +296,18 @@ export function createAuth(config = loadConfig()) {
     if (refreshPromise) return refreshPromise;
     refreshPromise = (async () => {
       if (!session) return null;
-      // Restore once, then reuse a still-valid access token. Calling
-      // setSession + refreshSession for every getUser/chat operation rotates
-      // refresh tokens unnecessarily and races concurrent requests.
-      const restored = session.access_token ? session : await restore();
+      // Restore once per process, then reuse a still-valid access token.
+      // Calling setSession + refreshSession for every getUser/chat operation
+      // rotates refresh tokens unnecessarily and races concurrent requests.
+      // But a freshly constructed client has no session attached until one
+      // of its own auth methods actually runs on it -- skipping restore()
+      // just because `session.access_token` looks unexpired left the client
+      // with no Authorization at all, so every request that depends on the
+      // CLIENT's own attached session (createThread, listThreads,
+      // loadThread, ...) ran unauthenticated and failed RLS checks, even
+      // though accessToken()/user() looked fine (getUser(token) takes the
+      // token directly and doesn't need the client's session).
+      const restored = session.access_token && sessionAttachedToClient ? session : await restore();
       if (!restored?.access_token) return null;
       if (tokenExpiry(restored.access_token) > Math.floor(Date.now() / 1000) + 60) return restored;
       if (!restored.refresh_token) {
@@ -302,6 +330,7 @@ export function createAuth(config = loadConfig()) {
         return null;
       }
       session = data.session;
+      sessionAttachedToClient = true;
       saveConfig({ session });
       return session;
     })();
