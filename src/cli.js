@@ -3587,14 +3587,14 @@ async function interactive(config, auth, configPath, existingState) {
 
   function fixedComposerFooter() {
     const model = color.muted(modelLabel(state.config.selectedModel));
-    const details = state.busy ? color.muted("· working · Ctrl+C cancels") : color.muted("· / commands · Ctrl+P actions");
+    const details = state.busy ? color.muted("· working · Ctrl+C cancels") : color.muted("· / commands");
     return `${model} ${details}`;
   }
 
   function fixedComposerFooterLine() {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
-    const left = shorten(`  ${fixedComposerStatus()}  ${fixedComposerFooter()}`, Math.max(8, width - 2));
+    const left = shorten(`  ${color.muted(displayPath())}  ${fixedComposerFooter()}`, Math.max(8, width - 2));
     const end = color.muted(`Nexara CLI ${CURRENT_VERSION}`);
     const availableEnd = Math.max(0, width - visibleLength(left) - 2);
     const fittedEnd = availableEnd ? shorten(end, availableEnd) : "";
