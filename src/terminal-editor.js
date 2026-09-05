@@ -17,7 +17,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     ({ line, cursor } = stashedDraft);
     stashedDraft = null;
   };
-  let currentPrompt = "  › ";
+  let currentPrompt = "┃  ";
   let rawBefore = false;
   let renderedRows = 1;
   // A modal picker (question/permission/model) installs its OWN keypress
@@ -38,7 +38,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     getCursorPos() { return { cols: currentPrompt.length + cursor, rows: 0 }; },
     setPrompt(value) {
       // Strip styling from the prompt and retain the visible glyphs only.
-      currentPrompt = String(value || "  › ").replace(/\u001b\[[0-9;]*m/g, "");
+      currentPrompt = String(value || "┃  ").replace(/\u001b\[[0-9;]*m/g, "");
     },
     on: (...args) => { events.on(...args); return editor; },
     once: (...args) => { events.once(...args); return editor; },
@@ -134,7 +134,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       const content = `${currentPrompt}${visibleChunks[index]}`;
       // Use the DEC save/restore pair so the transcript's CSI save slot is
       // never clobbered by editor redraws.
-      output.write(`\r\u001b[2K${content}\u001b7\u001b[${Math.max(1, columns - 1)}G║\u001b8`);
+      output.write(`\r\u001b[2K${content}\u001b7\u001b8`);
       // Clear through the full previous render span so stale wrapped rows
       // remain below the visible input instead of erasing it.
       if (index < rowsToClear - 1) output.write("\n");

@@ -1253,34 +1253,21 @@ function printNewConversationIntro() {
     const padding = Math.max(0, Math.floor((width - visibleLength(value)) / 2));
     return `${" ".repeat(padding)}${value}`;
   };
-  const commandRows = [
-    ["/help", "Show help and keyboard shortcuts", "ctrl+p h"],
-    ["/model", "Choose a model from the Nexara catalog", "ctrl+p m"],
-    ["/new", "Start a new session", "ctrl+p n"],
-    ["/compact", "Compact the current session", "ctrl+p c"],
-    ["/threads", "Browse saved sessions", "ctrl+p s"],
-  ];
   console.log();
-  // The upstream TUI uses a compact block logo centered in the home route,
-  // rather than a banner pinned to the top-left. Keep that composition while
-  // rebranding the mark for Nexara.
+  // OpenCode's Home route uses a compact two-column four-row logo. Keep the
+  // same footprint and rendering rhythm while rebranding the wordmark.
   const logo = [
-    "███╗   ██╗███████╗██╗  ██╗ █████╗ ██████╗  █████╗",
-    "████╗  ██║██╔════╝╚██╗██╔╝██╔══██╗██╔══██╗██╔══██╗",
-    "██╔██╗ ██║█████╗   ╚███╔╝ ███████║██████╔╝███████║",
-    "██║╚██╗██║██╔══╝   ██╔██╗ ██╔══██║██╔══██╗██╔══██║",
-    "██║ ╚████║███████╗██╔╝ ██╗██║  ██║██║  ██║██║  ██║",
-    "╚═╝  ╚══╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
+    ["█▀▀█ █▀▀▀ █__█", "█▀▀█ █▀▀█ █▀▀█"],
+    ["█__█ █___ ▀██▀", "█__█ █__█ █___"],
+    ["█^^^ █^^^ █^^█", "█▀▀▀ █▀▀▀ █^^^"],
+    ["▀▀▀▀ ▀▀▀▀ ▀__▀", "▀___ █__█ ▀___"],
   ];
-  logo.forEach((line, index) => console.log(center(index === 0 ? color.coral(line) : color.cream(line))));
+  logo.forEach(([left, right]) => {
+    console.log(center(`${color.muted(left)} ${color.cream(right)}`));
+  });
   console.log(center(color.muted("the open source coding agent")));
   console.log();
-  commandRows.forEach(([command, description, shortcut]) => {
-    const row = `  ${color.coral(command.padEnd(12))} ${color.muted(description.padEnd(38))} ${color.dim(shortcut)}`;
-    console.log(center(row));
-  });
-  console.log();
-  console.log(center(color.dim("Ask anything...")));
+  console.log(center(color.dim('Ask anything… "Fix a TODO in the codebase"')));
   console.log();
 }
 
@@ -3652,7 +3639,7 @@ async function interactive(config, auth, configPath, existingState) {
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[${inputRow};1H`);
-      rl.setPrompt("\u001b[38;2;250;249;245m  \u001b[38;2;204;120;92m› \u001b[0m ");
+      rl.setPrompt("\u001b[38;2;204;120;92m┃\u001b[38;2;250;249;245m  \u001b[0m");
       rl.prompt();
       composerMounted = true;
       return;
@@ -3662,7 +3649,7 @@ async function interactive(config, auth, configPath, existingState) {
     // color rather than trusting `stdout.columns` (which can be wrong in
     // Windows Terminal). This is the clean, full-width command rectangle.
     output.write("\r\u001b[2K\u001b[0m\r");
-    rl.setPrompt("\u001b[38;2;250;249;245m  \u001b[38;2;204;120;92m› \u001b[0m ");
+    rl.setPrompt("\u001b[38;2;204;120;92m┃\u001b[38;2;250;249;245m  \u001b[0m");
     rl.prompt();
   }
 
