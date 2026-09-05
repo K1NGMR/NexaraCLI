@@ -549,15 +549,32 @@ function activityText(status) {
 // interaction required. Collapses whitespace/newlines to one line since the
 // activity line has exactly one row to work with; the full multi-line
 // reasoning is still available afterward via Thinking/toggleThinking.
-function thinkingPreviewLine(text, maxWidth) {
+function livePreviewLine(prefix, text, maxWidth, fallback) {
   const flattened = String(text || "").replace(/\s+/g, " ").trim();
-  if (!flattened) return "Thinking…";
-  const prefix = "Thinking: ";
+  if (!flattened) return fallback;
   const budget = Math.max(8, maxWidth - visibleLength(prefix));
-  // Show the TAIL, not the head -- the most recent reasoning is what's
-  // actually in progress right now, same reason a log tail beats a log head.
+  // Show the TAIL, not the head -- the most recent token is what's actually
+  // in progress right now, same reason a log tail beats a log head.
   const tail = flattened.length > budget ? `…${flattened.slice(-(budget - 1))}` : flattened;
   return `${prefix}${tail}`;
+}
+
+function thinkingPreviewLine(text, maxWidth) {
+  return livePreviewLine("Thinking: ", text, maxWidth, "Thinking…");
+}
+
+// A live truncated tail of the response as it streams in -- shown in place
+// of a static "Writing response" label so the AI visibly appears to type
+// instead of going silent and then dumping the whole answer at once. This
+// intentionally stays a single plain-text line rather than incrementally
+// rendering markdown into the transcript: markdown (an unclosed code fence,
+// a list that's still growing) can only be rendered correctly once the full
+// block is known, and the transcript's absolute-cursor system needs the
+// final row count up front -- both would have to be reinvented to stream
+// formatted output safely. The full, correctly rendered answer still gets
+// printed once, exactly as before, right after this preview is cleared.
+function writingPreviewLine(text, maxWidth) {
+  return livePreviewLine("", text, maxWidth, "Writing response");
 }
 
 function composerActivityLine(state) {
@@ -568,7 +585,11 @@ function composerActivityLine(state) {
     const preview = thinkingPreviewLine(state.thinkingText, Math.max(20, Math.min(60, terminalWidth() - 20)));
     return `${color.amber(THINKING_FRAMES[frame % THINKING_FRAMES.length])} ${color.muted(preview)}`;
   }
-  const label = status === "writing" ? "Writing response" : activityText(status);
+  if (status === "writing") {
+    const preview = writingPreviewLine(state.streamedText, Math.max(20, Math.min(60, terminalWidth() - 20)));
+    return `${color.coral(PROCESSING_FRAMES[frame % PROCESSING_FRAMES.length])} ${color.muted(preview)}`;
+  }
+  const label = activityText(status);
   return `${color.coral(PROCESSING_FRAMES[frame % PROCESSING_FRAMES.length])} ${color.muted(label)}`;
 }
 
@@ -594,7 +615,7 @@ function startComposerActivityAnimation(state) {
   };
 }
 
-function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, getCursorCol = () => 0, stableComposer = false, transcript = null, getThinkingPreview = null } = {}) {
+function createActivityLine({ quiet = false, streamJson = false, getCursorOffset = () => 0, getCursorCol = () => 0, stableComposer = false, transcript = null, getThinkingPreview = null, getWritingPreview = null } = {}) {
   const startedAt = Date.now();
   let status = "waiting";
   let frame = 0;
@@ -609,6 +630,7 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
   // static label for any other status, or if the caller has no preview.
   const activityLineText = (maxWidth) => {
     if (status === "thinking" && getThinkingPreview) return thinkingPreviewLine(getThinkingPreview(), maxWidth);
+    if (status === "writing" && getWritingPreview) return writingPreviewLine(getWritingPreview(), maxWidth);
     return activityText(status);
   };
   // Moving up `offset` rows to redraw the activity line, then back down
@@ -885,13 +907,28 @@ function terminalWidth() {
 
 let alternateScreenActive = false;
 
+// The alternate screen buffer ([?1049h) used to be the default here so
+// exiting could cleanly restore whatever was on screen before Nexara
+// started. The cost, discovered the hard way: most terminal emulators
+// (Windows Terminal included) give the alt screen NO scrollback at all, so
+// there was no way to scroll up and reread anything earlier in a long
+// conversation -- for a chat tool, that matters far more than a tidy exit.
+// Staying in the primary buffer costs nothing else: the scroll-region +
+// absolute-cursor system below (transcriptBottom/prepareTranscript etc.)
+// operates on whatever buffer is active and looks identical either way.
+// NEXARA_ALT_SCREEN=1 opts back into the old no-scrollback behavior for
+// anyone who prefers a clean restore over scrollback.
+let usingAltScreenBuffer = false;
 function enterTerminalScreen() {
-  if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ALT_SCREEN === "1") return;
+  if (!input.isTTY || !output.isTTY) return;
   if (alternateScreenActive) return;
-  // OpenCode owns a separate screen while its TUI is running. This hides the
-  // shell's existing output without destroying it, so it can be restored on
-  // exit instead of leaving the chat mixed into the terminal scrollback.
-  output.write("\u001b[?1049h\u001b[2J\u001b[H\u001b[?25l");
+  if (process.env.NEXARA_ALT_SCREEN === "1") {
+    output.write("\u001b[?1049h\u001b[2J\u001b[H\u001b[?25l");
+    usingAltScreenBuffer = true;
+  } else {
+    output.write("\u001b[2J\u001b[H\u001b[?25l");
+    usingAltScreenBuffer = false;
+  }
   alternateScreenActive = true;
 }
 
@@ -901,7 +938,8 @@ function restoreTerminalScreen() {
   // Restore the shell buffer, then erase the command line position that the
   // TUI inherited. Without this final line cleanup, Windows Terminal can
   // leave fragments of the launch command or typed input behind the prompt.
-  output.write("\u001b[?1006l\u001b[?1000l\u001b[?2004l\u001b[?1004l\u001b[?1049l\u001b[?25h\u001b[0m\r\u001b[2K\r\n");
+  const exitAltScreen = usingAltScreenBuffer ? "\u001b[?1049l" : "";
+  output.write(`\u001b[?1006l\u001b[?1000l\u001b[?2004l\u001b[?1004l${exitAltScreen}\u001b[?25h\u001b[0m\r\u001b[2K\r\n`);
 }
 
 function clearTerminalForSession() {
@@ -2505,9 +2543,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       // on its own 120ms timer, so this alone makes thinking visible as it
       // happens with no key/click required.
       getThinkingPreview: () => state.thinkingText,
+      // Same live-tail treatment for the response text itself once it starts
+      // streaming (see writingPreviewLine) -- state.streamedText is kept in
+      // sync by writeText below.
+      getWritingPreview: () => state.streamedText,
     });
     state.thinkingText = "";
     state.thinkingExpanded = false;
+    state.streamedText = "";
     let thinkingRendered = false;
     const toggleThinking = () => {
       if (!state.thinkingText && !state.thinkingExpanded) {
@@ -2552,6 +2595,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       // after a reconnect (see responseText below), so it needs the same
       // bound or capping state.text alone would do nothing.
       if (streamedText.length < MAX_ACCUMULATED_TEXT_BYTES) streamedText += delta;
+      state.streamedText = streamedText;
       if (machine) outputToolEvent(state, { type: "text-delta", delta });
       else if (state.outputFormat !== "json") {
         if (!responseStarted) {
