@@ -5,7 +5,7 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 import { createAuth } from "./auth.js";
-import { createThread, listThreads, loadThread, messageText, sendChat, transcribeAudio, userMessage } from "./api.js";
+import { createThread, listThreads, loadThread, MAX_ACCUMULATED_TEXT_BYTES, messageText, sendChat, transcribeAudio, userMessage } from "./api.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { startMicRecording } from "./mic.js";
 import { createTerminalEditor } from "./terminal-editor.js";
@@ -2407,7 +2407,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     let responseStarted = false;
     let responseStreamRendered = false;
     const writeText = (delta) => {
-      streamedText += delta;
+      // Mirrors api.js's own cap on state.text -- streamedText (not
+      // assistant.text) is what actually becomes the saved/rendered answer
+      // after a reconnect (see responseText below), so it needs the same
+      // bound or capping state.text alone would do nothing.
+      if (streamedText.length < MAX_ACCUMULATED_TEXT_BYTES) streamedText += delta;
       if (machine) outputToolEvent(state, { type: "text-delta", delta });
       else if (state.outputFormat !== "json") {
         if (!responseStarted) {
@@ -2443,7 +2447,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
         },
         onText: writeText,
         onReasoning: (delta) => {
-          state.thinkingText += delta;
+          if (state.thinkingText.length < MAX_ACCUMULATED_TEXT_BYTES) state.thinkingText += delta;
           setComposerActivity(state, "thinking");
           // Buffer reasoning while it streams. Repainting the transcript and
           // fixed composer for every token caused visible flicker and cursor

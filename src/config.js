@@ -35,7 +35,15 @@ export function loadConfig() {
   } catch {
     // First run or a partially deleted config: start from safe defaults.
   }
-  const merged = { ...DEFAULT_CONFIG, ...parsed };
+  // Environment variables are deployment-time authority. They must override
+  // saved values so staging/CI cannot accidentally keep talking to a previous
+  // installation's app or Supabase project.
+  const envOverrides = {
+    ...(process.env.NEXARA_APP_URL ? { appUrl: process.env.NEXARA_APP_URL } : {}),
+    ...(process.env.NEXARA_SUPABASE_URL ? { supabaseUrl: process.env.NEXARA_SUPABASE_URL } : {}),
+    ...(process.env.NEXARA_SUPABASE_PUBLISHABLE_KEY ? { supabaseKey: process.env.NEXARA_SUPABASE_PUBLISHABLE_KEY } : {}),
+  };
+  const merged = { ...DEFAULT_CONFIG, ...parsed, ...envOverrides };
   // The first CLI release used MiniMax M2.5 as its implicit default. Migrate
   // only that untouched legacy default; an explicitly chosen model remains
   // exactly as the user set it.

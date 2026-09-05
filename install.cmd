@@ -8,7 +8,14 @@ set "TEMP_DIR=%TEMP%\nexara-cli-%RANDOM%%RANDOM%"
 set "ZIP_FILE=%TEMP_DIR%.zip"
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Node.js 20+ is required. Install it from https://nodejs.org/ first.
+  echo Node.js 22+ is required. Install it from https://nodejs.org/ first.
+  exit /b 1
+)
+for /f "delims=" %%V in ('node --version') do set "NODE_VERSION=%%V"
+for /f "tokens=1 delims=.v" %%V in ("%NODE_VERSION%") do set "NODE_MAJOR=%%V"
+if not defined NODE_MAJOR set "NODE_MAJOR=0"
+if %NODE_MAJOR% LSS 22 (
+  echo Node.js 22+ is required; found %NODE_VERSION%.
   exit /b 1
 )
 mkdir "%TEMP_DIR%" >nul 2>nul
@@ -45,4 +52,5 @@ set "EXIT_CODE=1"
 :cleanup
 rmdir /s /q "%TEMP_DIR%" >nul 2>nul
 del /q "%ZIP_FILE%" >nul 2>nul
+if not defined EXIT_CODE set "EXIT_CODE=0"
 exit /b %EXIT_CODE%

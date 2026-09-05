@@ -9,7 +9,10 @@ $repo = 'https://github.com/K1NGMR/NexaraCLI/archive/refs/heads/main.zip'
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('nexara-cli-' + [guid]::NewGuid().ToString())
 $zip = "$temp.zip"
 try {
-  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node.js 20+ is required. Install it from https://nodejs.org/ first.' }
+  $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $nodeCommand) { throw 'Node.js 22+ is required. Install it from https://nodejs.org/ first.' }
+  $nodeVersion = (& $nodeCommand.Source --version).Trim()
+  if ($nodeVersion -notmatch '^v(\d+)\.' -or [int]$Matches[1] -lt 22) { throw "Node.js 22+ is required; found $nodeVersion." }
   New-Item -ItemType Directory -Path $temp -Force | Out-Null
   Write-Host 'Downloading Nexara CLI...' -ForegroundColor Cyan
   Invoke-WebRequest -Uri $repo -OutFile $zip -UseBasicParsing

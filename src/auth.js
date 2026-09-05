@@ -37,6 +37,7 @@ export function withTimeout(promise, ms, message) {
 export function createAuth(config = loadConfig()) {
   let client;
   let session = config.session;
+  let refreshPromise = null;
 
   function getClient() {
     return (client ??= clientFor(config));
@@ -262,23 +263,57 @@ export function createAuth(config = loadConfig()) {
     return (await user()) || {};
   }
 
-  async function refresh() {
-    if (!session) return null;
-    const restored = await restore();
-    if (!restored) return null;
-    const { data, error } = await withTimeout(
-      getClient().auth.refreshSession({ refresh_token: restored.refresh_token }),
-      20_000,
-      "Nexara token refresh timed out. Check your connection and try again.",
-    );
-    if (error || !data.session) return restored;
-    session = data.session;
-    saveConfig({ session });
-    return session;
+  function tokenExpiry(token) {
+    try {
+      const payload = JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString("utf8"));
+      return Number(payload.exp) || 0;
+    } catch {
+      return 0;
+    }
   }
 
-  async function accessToken() {
-    const active = await refresh();
+  async function refresh({ signal } = {}) {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = (async () => {
+      if (!session) return null;
+      // Restore once, then reuse a still-valid access token. Calling
+      // setSession + refreshSession for every getUser/chat operation rotates
+      // refresh tokens unnecessarily and races concurrent requests.
+      const restored = session.access_token ? session : await restore();
+      if (!restored?.access_token) return null;
+      if (tokenExpiry(restored.access_token) > Math.floor(Date.now() / 1000) + 60) return restored;
+      if (!restored.refresh_token) {
+        session = null;
+        clearSession();
+        return null;
+      }
+      const refreshCall = withTimeout(
+        getClient().auth.refreshSession({ refresh_token: restored.refresh_token }),
+        20_000,
+        "Nexara token refresh timed out. Check your connection and try again.",
+      );
+      const { data, error } = await (signal ? Promise.race([
+        refreshCall,
+        new Promise((_, reject) => signal.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true })),
+      ]) : refreshCall);
+      if (error || !data?.session) {
+        session = null;
+        clearSession();
+        return null;
+      }
+      session = data.session;
+      saveConfig({ session });
+      return session;
+    })();
+    try {
+      return await refreshPromise;
+    } finally {
+      refreshPromise = null;
+    }
+  }
+
+  async function accessToken(options = {}) {
+    const active = await refresh(options);
     return active?.access_token || null;
   }
 

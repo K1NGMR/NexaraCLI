@@ -18,11 +18,15 @@
   "scripts": {
     "check": "node --check bin/nexara.js && node --check src/api.js && node --check src/auth.js && node --check src/cli.js && node --check src/config.js && node --check src/mic.js && node --check src/qr.js && node --check src/sessions.js && node --check src/terminal-editor.js && node --check src/tools.js && node --check src/update.js",
     "test": "node --test test/**/*.test.js",
+    "test:unit": "npm test",
+    "test:integration": "node --test test/agent-loop.test.js test/tools.test.js",
+    "test:security": "node --test test/security.test.js",
     "smoke": "node ./bin/nexara.js --help",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "pack:smoke": "node test/pack-smoke.test.js"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",

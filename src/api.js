@@ -8,6 +8,9 @@ function id() {
   return crypto.randomUUID();
 }
 
+// See consumeDataLine's text/reasoning accumulation below.
+export const MAX_ACCUMULATED_TEXT_BYTES = 4_000_000;
+
 function textOf(message) {
   return (message.parts || [])
     .filter((part) => part.type === "text")
@@ -168,7 +171,7 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
     return;
   }
 
-  const type = String(event.type || "").toLowerCase();
+  const type = String(event.type || event.kind || "").toLowerCase();
   const metadata = event.metadata || event.messageMetadata || state.metadata || {};
   if (type === "message-metadata") {
     state.metadata = event.messageMetadata || event.metadata || event;
@@ -183,7 +186,11 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
   } else if (type === "text-delta" || type === "text" || type === "textdelta") {
     const delta = event.delta ?? event.text ?? event.value ?? "";
     if (delta) {
-      state.text += delta;
+      // No provider-side bug (a runaway repetition loop, a malfunctioning
+      // gateway) should be able to grow this without bound for the whole
+      // life of the stream -- the CLI still renders/holds this string in
+      // memory as one piece.
+      if (state.text.length < MAX_ACCUMULATED_TEXT_BYTES) state.text += delta;
       onText(delta);
     }
   } else if (type === "reasoning-start") {
@@ -191,21 +198,24 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
   } else if (type === "reasoning-delta" || type === "reasoning") {
     const delta = event.delta ?? event.text ?? event.value ?? "";
     if (delta) {
-      state.reasoning += delta;
+      if (state.reasoning.length < MAX_ACCUMULATED_TEXT_BYTES) state.reasoning += delta;
       onReasoning?.(delta);
     }
     onStatus?.("thinking");
   } else if (type === "tool-input-start") {
     state.toolInputs ??= new Map();
     if (event.toolCallId) state.toolInputs.set(event.toolCallId, "");
-    onStatus?.(`tool:${event.toolName || "tool"}`);
+    onStatus?.(`tool:${event.toolName || event.name || event.tool?.name || "tool"}`);
   } else if (type === "tool-input-delta") {
     state.toolInputs ??= new Map();
     const toolCallId = event.toolCallId || "default";
     state.toolInputs.set(toolCallId, `${state.toolInputs.get(toolCallId) || ""}${event.delta || event.inputText || ""}`);
     onStatus?.(`tool:${event.toolName || "tool"}`);
   } else if (type === "tool-input-available" || type === "tool-call") {
-    const name = String(event.toolName || "");
+    // `toolName` is the current UI-message wire name. Older gateways and
+    // relay versions used `name`, and some emitted a nested tool object. Keep
+    // all three compatible so a valid client tool call is never silently lost.
+    const name = String(event.toolName || event.name || event.tool?.name || "");
     onStatus?.(`tool:${name || "tool"}`);
     // A single assistant step can request several client tools at once (the
     // model called Read+Read, or Read+Search, in parallel). Capturing only
@@ -214,7 +224,7 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
     if (CLI_CLIENT_TOOL_NAMES.has(name) && (!event.toolCallId || !state.nativeCalls.some((call) => call.toolCallId === event.toolCallId))) {
       const call = {
         name,
-        arguments: parseToolInput(event.input ?? event.arguments ?? state.toolInputs?.get(event.toolCallId)),
+        arguments: parseToolInput(event.input ?? event.arguments ?? event.tool?.input ?? state.toolInputs?.get(event.toolCallId)),
         toolCallId: event.toolCallId || null,
       };
       state.nativeCalls.push(call);
@@ -222,7 +232,7 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
     }
   } else if (type === "tool-output-available" || type === "tool-result") {
     onToolResult?.({
-      name: event.toolName || "tool",
+      name: event.toolName || event.name || event.tool?.name || "tool",
       toolCallId: event.toolCallId || null,
       output: event.output,
     });
@@ -278,7 +288,7 @@ export async function sendChat({
   signal,
   quiet = false,
 }) {
-  const token = await auth.accessToken();
+  const token = await auth.accessToken({ signal });
   if (!token) throw new Error("Your Nexara session expired. Run `nexara login` again.");
   const body = {
     messages,
