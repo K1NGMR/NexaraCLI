@@ -1132,6 +1132,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const branch = firstArg(args, "branch", "name");
       if (!branch || /[\s;&|<>]/.test(branch)) throw new Error("GitCheckout requires a simple branch name.");
       const result = await executeGit(["checkout", ...(args.create === true ? ["-b"] : []), branch], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git checkout failed");
       return `${result.stdout}${result.stderr}`.trim();
     }
     case "GitCommit": {
@@ -1149,11 +1150,13 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       const action = firstArg(args, "action") || "push";
       if (!["push", "pop", "list", "clear"].includes(action)) throw new Error("GitStash action must be push, pop, list, or clear.");
       const result = await executeGit(["stash", action], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git stash failed");
       return `${result.stdout}${result.stderr}`.trim();
     }
     case "GitBlame": {
       const filePath = pathArg("file_path", "path");
       const result = await executeGit(["blame", "--", relativePath(filePath, cwd)], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git blame failed");
       return `${result.stdout}${result.stderr}`.trim();
     }
     case "GitShow": {
@@ -1161,6 +1164,7 @@ export async function executeCliTool(name, args = {}, { cwd = process.cwd(), all
       if (/[\s;&|<>]/.test(revision)) throw new Error("GitShow requires a simple revision.");
       const file = firstArg(args, "file");
       const result = await executeGit(["show", ...(file ? [] : ["--stat", "--oneline"]), revision, ...(file ? ["--", file] : [])], cwd);
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "git show failed");
       return `${result.stdout}${result.stderr}`.trim();
     }
     case "CurrentTime":

@@ -2284,6 +2284,19 @@ function usageCompute(model, usage) {
   return Math.max(0, Math.round(providerCost * COMPUTE_PER_DOLLAR));
 }
 
+function compactLocalMessages(messages) {
+  const rows = Array.isArray(messages) ? messages : [];
+  if (rows.length <= 12) return rows;
+  const summary = rows.slice(0, -12).map((message) => {
+    const text = messageText(message).replace(/\s+/g, " ").trim();
+    return `${message?.role || "message"}: ${text || "(non-text content)"}`;
+  }).join("\n").slice(0, 24_000);
+  return [
+    { id: `local-summary-${Date.now()}`, role: "user", parts: [{ type: "text", text: `Local conversation summary (earlier messages):\n\n${summary}` }] },
+    ...rows.slice(-12),
+  ];
+}
+
 async function retryChatRequest(request, { onRetry, maxAttempts = 3 } = {}) {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -2845,7 +2858,7 @@ async function handleSlash(state, line) {
         return true;
       }
       if (!state.threadId) {
-        if (state.messages.length > 12) state.messages = state.messages.slice(-12);
+        state.messages = compactLocalMessages(state.messages);
         console.log(color.green(`Local context compacted to ${state.messages.length} messages.`));
         return true;
       }
