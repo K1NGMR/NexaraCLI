@@ -4008,19 +4008,16 @@ async function interactive(config, auth, configPath, existingState) {
 
   function refreshFixedStatus() {
     if (!composerMounted || railTop == null) return;
-    const inputStartRow = railTop ?? transcriptBottom() + 1;
-    const metadataRow = inputStartRow + COMPOSER_INPUT_ROWS;
-    const statusRow = railRows ?? terminalRows();
-    output.write(`\u001b7\u001b[${metadataRow};1H\u001b[2K${fixedComposerMetadataLine()}\u001b8`);
-    output.write(`\u001b7\u001b[${statusRow};1H\u001b[2K${fixedComposerFooterLine()}\u001b8`);
-    if (state.busy) {
-      const preview = draftPreviewRows();
-      for (let index = 0; index < COMPOSER_INPUT_ROWS; index += 1) {
-        const row = inputStartRow + index;
-        const content = preview[index] ?? "";
-        output.write(`\u001b7\u001b[${row};1H\u001b[2K  \u001b[38;2;250;249;245m${content}\u001b[0m\u001b8`);
-      }
-    }
+    const width = Math.max(20, Number(output.columns) || 80);
+    const top = railTop;
+    const inputRow = top + 1;
+    const bottomRow = top + 2;
+    const border = color.blue("─".repeat(width));
+    const promptStr = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
+    const text = typeof rl?.line === "string" ? rl.line : "";
+    output.write(`\u001b7\u001b[${top};1H\u001b[2K${border}\u001b8`);
+    output.write(`\u001b7\u001b[${inputRow};1H\u001b[2K${promptStr}\u001b[38;2;250;249;245m${text}\u001b[0m\u001b8`);
+    output.write(`\u001b7\u001b[${bottomRow};1H\u001b[2K${border}\u001b8`);
   }
 
   function drawFixedComposerRail({ includeInput = false } = {}) {
@@ -4030,11 +4027,14 @@ async function interactive(config, auth, configPath, existingState) {
     railRows = bottomRow;
     railTop = top;
     const width = Math.max(20, Number(output.columns) || 80);
-    output.write(`\u001b[${top};1H\u001b[2K${color.blue("─".repeat(width))}`);
+    const border = color.blue("─".repeat(width));
+    const promptStr = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
+    output.write(`\u001b[${top};1H\u001b[2K${border}`);
     if (includeInput) {
-      output.write(`\u001b[${inputRow};1H\u001b[2K\u001b[0m`);
+      const text = typeof rl?.line === "string" ? rl.line : "";
+      output.write(`\u001b[${inputRow};1H\u001b[2K${promptStr}\u001b[38;2;250;249;245m${text}\u001b[0m`);
     }
-    output.write(`\u001b[${bottomRow};1H\u001b[2K${color.blue("─".repeat(width))}`);
+    output.write(`\u001b[${bottomRow};1H\u001b[2K${border}`);
   }
 
   function showComposer() {
