@@ -16,8 +16,20 @@ test("sandboxed and automatic modes permit shell execution but block destructive
 });
 
 test("workspace path resolver rejects traversal outside the workspace", () => {
-  assert.throws(() => resolveWorkspacePath("../outside", "C:/workspace/project"), /outside the workspace/);
-  assert.equal(resolveWorkspacePath("src/index.js", "C:/workspace/project"), "C:\\workspace\\project\\src\\index.js");
+  // A hardcoded Windows-style literal ("C:/workspace/project") only means
+  // "absolute path" on Windows -- resolveWorkspacePath resolves through
+  // node:path, which is intentionally platform-native (a real CLI process
+  // resolves paths the way its own host OS does), so on Linux/macOS that
+  // same literal is just a relative path with a weird "C:" first segment
+  // and gets joined onto the real cwd instead of staying put. This never
+  // surfaced locally (only ever run on Windows) until it broke CI on
+  // Ubuntu. path.resolve(path.sep, ...) builds a synthetic, guaranteed-
+  // absolute root the same way on every platform (an actual drive-rooted
+  // path on Windows, a plain absolute path on POSIX) without ever touching
+  // a real directory, keeping the original synthetic-path intent.
+  const workspaceRoot = path.resolve(path.sep, "workspace", "project");
+  assert.throws(() => resolveWorkspacePath("../outside", workspaceRoot), /outside the workspace/);
+  assert.equal(resolveWorkspacePath("src/index.js", workspaceRoot), path.join(workspaceRoot, "src", "index.js"));
 });
 
 test("glob supports root-level matches with a recursive pattern", async () => {
