@@ -4274,6 +4274,7 @@ async function interactive(config, auth, configPath, existingState) {
       showComposer();
       return;
     }
+    activeRun = true;
     void runInteractiveLine(line, files);
   };
 
