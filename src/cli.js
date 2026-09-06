@@ -1543,8 +1543,6 @@ function printNewConversationIntro() {
   };
   console.log();
 
-  // Column boundaries for N-E-X-A-R-A in the 50-character ASCII art block:
-  // N: 0-7, E: 8-15, X: 16-23, A: 24-31, R: 32-39, A: 40-50
   const asciiLines = [
     "███╗   ██╗███████╗██╗  ██╗██████╗ ██████╗  █████╗ ",
     "████╗  ██║██╔════╝╚██╗██╔╝██╔══██╗██╔══██╗██╔══██╗",
@@ -1554,32 +1552,68 @@ function printNewConversationIntro() {
     "╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
   ];
 
-  // Maroon to coral gradient RGB palette across the 6 letters (N -> E -> X -> A -> R -> A)
-  const maroonCoralGradient = [
-    rgb(128, 0, 32),   // Deep Maroon (N)
-    rgb(155, 30, 45),  // Maroon (E)
-    rgb(175, 55, 55),  // Dark Coral-Maroon (X)
-    rgb(195, 80, 65),  // Coral Maroon (A)
-    rgb(204, 120, 92), // Coral (R)
-    rgb(230, 150, 110),// Light Coral (A)
+  // Palette array cycling maroon -> coral -> bright cream highlight -> maroon
+  const palette = [
+    rgb(115, 0, 28),   // Deep Maroon
+    rgb(155, 30, 45),  // Maroon
+    rgb(195, 70, 55),  // Dark Coral
+    rgb(204, 120, 92), // Coral
+    rgb(255, 195, 160),// Light Coral Highlight
+    rgb(250, 249, 245),// Cream Peak Highlight
   ];
 
-  asciiLines.forEach((line) => {
-    let coloredLine = "";
-    // Segment by letter slices (approx 8 chars per letter)
-    const slices = [
-      line.slice(0, 8),
-      line.slice(8, 16),
-      line.slice(16, 24),
-      line.slice(24, 32),
-      line.slice(32, 40),
-      line.slice(40),
-    ];
-    slices.forEach((slice, index) => {
-      coloredLine += maroonCoralGradient[index](slice);
+  const renderBannerFrame = (offset) => {
+    asciiLines.forEach((line) => {
+      let coloredLine = "";
+      const slices = [
+        line.slice(0, 8),
+        line.slice(8, 16),
+        line.slice(16, 24),
+        line.slice(24, 32),
+        line.slice(32, 40),
+        line.slice(40),
+      ];
+      slices.forEach((slice, index) => {
+        const colorIdx = (index + offset) % palette.length;
+        coloredLine += palette[colorIdx](slice);
+      });
+      console.log(center(coloredLine));
     });
-    console.log(center(coloredLine));
-  });
+  };
+
+  if (!input.isTTY || !output.isTTY || process.env.NEXARA_NO_ANIMATION === "1") {
+    renderBannerFrame(0);
+  } else {
+    // Initial print of banner lines
+    renderBannerFrame(0);
+
+    // Animate wave highlight cycling from N to A (6 frame cycle)
+    let frame = 1;
+    const interval = setInterval(() => {
+      // Move cursor back up 6 lines to repaint in place
+      output.write("\u001b[6A");
+      asciiLines.forEach((line) => {
+        let coloredLine = "";
+        const slices = [
+          line.slice(0, 8),
+          line.slice(8, 16),
+          line.slice(16, 24),
+          line.slice(24, 32),
+          line.slice(32, 40),
+          line.slice(40),
+        ];
+        slices.forEach((slice, index) => {
+          const colorIdx = (index + frame) % palette.length;
+          coloredLine += palette[colorIdx](slice);
+        });
+        output.write(`\r\u001b[2K${center(coloredLine)}\n`);
+      });
+      frame = (frame + 1) % palette.length;
+    }, 180);
+
+    // Allow process to unref interval if exiting early
+    if (typeof interval.unref === "function") interval.unref();
+  }
 
   console.log();
   console.log(center(`${color.cream("Nexara AI Coding Assistant")} ${color.dim("· v0.1.87")}`));
