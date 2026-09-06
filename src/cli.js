@@ -4097,7 +4097,7 @@ async function interactive(config, auth, configPath, existingState) {
     output.write(`\u001b7\u001b[${bottomRow};1H\u001b[2K${border}\u001b8`);
   }
 
-  function drawFixedComposerRail({ includeInput = false } = {}) {
+  function drawFixedComposerRail() {
     const top = transcriptBottom() + 1;
     const inputRow = top + 1;
     const bottomRow = top + 2;
@@ -4106,11 +4106,9 @@ async function interactive(config, auth, configPath, existingState) {
     const width = Math.max(20, Number(output.columns) || 80);
     const border = color.blue("─".repeat(width));
     const promptStr = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
+    const text = typeof rl?.line === "string" ? rl.line : "";
     output.write(`\u001b[${top};1H\u001b[2K${border}`);
-    if (includeInput) {
-      const text = typeof rl?.line === "string" ? rl.line : "";
-      output.write(`\u001b[${inputRow};1H\u001b[2K${promptStr}\u001b[38;2;250;249;245m${text}\u001b[0m`);
-    }
+    output.write(`\u001b[${inputRow};1H\u001b[2K${promptStr}\u001b[38;2;250;249;245m${text}\u001b[0m`);
     output.write(`\u001b[${bottomRow};1H\u001b[2K${border}`);
   }
 
@@ -4123,11 +4121,10 @@ async function interactive(config, auth, configPath, existingState) {
       output.write("\u001b[s");
       transcriptCursorSaved = true;
       output.write(`\u001b[1;${transcriptBottom()}r`);
-      drawFixedComposerRail({ includeInput: false });
-      output.write(`\u001b[${inputRow};1H`);
+      drawFixedComposerRail();
+      output.write(`\u001b[${inputRow};1H\r\u001b[3C`);
       rl.resetRenderAnchor?.();
       rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
-      rl.prompt();
       composerMounted = true;
       return;
     }
