@@ -3724,32 +3724,44 @@ async function interactive(config, auth, configPath, existingState) {
     const tail = Math.min(transcriptBottom(), realContentRows + 1);
     if (activityRow != null && tail <= activityRow) return true;
     if (activityRow != null && activityRow <= transcriptBottom()) {
-      output.write(`\u001b7\u001b[${activityRow};1H\u001b[2K\u001b8`);
+      output.write(`\u001b[${activityRow};1H\u001b[2K`);
     }
-    // prepareTranscript() parks the real cursor on the reserved row. That is
-    // correct when transcript text is about to be printed, but this runs on a
-    // timer while readline owns the caret -- bracket it so the caret lands
-    // back in the composer.
-    output.write(`\u001b7`);
     activityRow = state.prepareTranscript(1);
-    output.write(`\u001b8`);
     state.transcriptActivityActive = activityRow != null;
+    if (railTop != null) {
+      const inputRow = railTop + 1;
+      const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
+      const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
+      output.write(`\u001b[${inputRow};${targetCol}H`);
+    }
     return state.transcriptActivityActive;
   };
   state.paintTranscriptActivity = (text) => {
     if (activityRow == null || !output.isTTY) return false;
     if (activityRow > transcriptBottom()) return false;
-    output.write(`\u001b7\u001b[${activityRow};1H\u001b[2K${text}\u001b8`);
+    output.write(`\u001b[${activityRow};1H\u001b[2K${text}`);
+    if (railTop != null) {
+      const inputRow = railTop + 1;
+      const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
+      const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
+      output.write(`\u001b[${inputRow};${targetCol}H`);
+    }
     return true;
   };
   state.endTranscriptActivity = () => {
     if (activityRow == null) return;
-    if (activityRow <= transcriptBottom()) output.write(`\u001b7\u001b[${activityRow};1H\u001b[2K\u001b8`);
+    if (activityRow <= transcriptBottom()) output.write(`\u001b[${activityRow};1H\u001b[2K`);
     // Hand the reserved row back so the response (or the next tool line) is
     // written over the spinner instead of leaving a blank gap behind it.
     transcriptFlowRow = Math.max(1, activityRow);
     activityRow = null;
     state.transcriptActivityActive = false;
+    if (railTop != null) {
+      const inputRow = railTop + 1;
+      const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
+      const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
+      output.write(`\u001b[${inputRow};${targetCol}H`);
+    }
   };
   let transcriptCursorSaved = false;
   let composerMounted = false;
@@ -3867,15 +3879,19 @@ async function interactive(config, auth, configPath, existingState) {
   function clearSlashSuggestions(afterSubmit = false) {
     cancelSlashSuggestionTimer();
     if (fixedComposer && slashSuggestionLines && slashSuggestionTop != null && output.isTTY) {
-      output.write("\u001b7");
       for (let index = 0; index < slashSuggestionLines; index += 1) {
         output.write(`\u001b[${slashSuggestionTop + index};1H\u001b[2K`);
       }
-      output.write("\u001b8");
       slashSuggestionLines = 0;
       slashSuggestionTop = null;
       slashSuggestionIndex = -1;
       slashSuggestionInput = null;
+      if (railTop != null) {
+        const inputRow = railTop + 1;
+        const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
+        const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
+        output.write(`\u001b[${inputRow};${targetCol}H`);
+      }
       return;
     }
     if (!slashSuggestionLines || !output.isTTY) {
@@ -3907,13 +3923,15 @@ async function interactive(config, auth, configPath, existingState) {
     if (fixedComposer) {
       if (railTop == null) return;
       const top = Math.max(1, railTop - rows.length);
-      output.write("\u001b7");
       rows.forEach((row, index) => {
         output.write(`\u001b[${top + index};1H\u001b[2K${row}`);
       });
-      output.write("\u001b8");
       slashSuggestionLines = rows.length;
       slashSuggestionTop = top;
+      const inputRow = railTop + 1;
+      const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
+      const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
+      output.write(`\u001b[${inputRow};${targetCol}H`);
       return;
     }
     const cursor = typeof rl.getCursorPos === "function" ? rl.getCursorPos() : { cols: 2 };
