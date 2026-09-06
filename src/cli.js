@@ -1542,7 +1542,10 @@ function printNewConversationIntro() {
     return `${" ".repeat(padding)}${value}`;
   };
   console.log();
-  const asciiLogo = [
+
+  // Column boundaries for N-E-X-A-R-A in the 50-character ASCII art block:
+  // N: 0-7, E: 8-15, X: 16-23, A: 24-31, R: 32-39, A: 40-50
+  const asciiLines = [
     "███╗   ██╗███████╗██╗  ██╗██████╗ ██████╗  █████╗ ",
     "████╗  ██║██╔════╝╚██╗██╔╝██╔══██╗██╔══██╗██╔══██╗",
     "██╔██╗ ██║█████╗   ╚███╔╝ ██████╔╝██████╔╝███████║",
@@ -1550,7 +1553,34 @@ function printNewConversationIntro() {
     "██║ ╚████║███████╗██╔╝ ██╗██║  ██║██║  ██║██║  ██║",
     "╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
   ];
-  asciiLogo.forEach((line) => console.log(center(color.coral(line))));
+
+  // Maroon to coral gradient RGB palette across the 6 letters (N -> E -> X -> A -> R -> A)
+  const maroonCoralGradient = [
+    rgb(128, 0, 32),   // Deep Maroon (N)
+    rgb(155, 30, 45),  // Maroon (E)
+    rgb(175, 55, 55),  // Dark Coral-Maroon (X)
+    rgb(195, 80, 65),  // Coral Maroon (A)
+    rgb(204, 120, 92), // Coral (R)
+    rgb(230, 150, 110),// Light Coral (A)
+  ];
+
+  asciiLines.forEach((line) => {
+    let coloredLine = "";
+    // Segment by letter slices (approx 8 chars per letter)
+    const slices = [
+      line.slice(0, 8),
+      line.slice(8, 16),
+      line.slice(16, 24),
+      line.slice(24, 32),
+      line.slice(32, 40),
+      line.slice(40),
+    ];
+    slices.forEach((slice, index) => {
+      coloredLine += maroonCoralGradient[index](slice);
+    });
+    console.log(center(coloredLine));
+  });
+
   console.log();
   console.log(center(`${color.cream("Nexara AI Coding Assistant")} ${color.dim("· v0.1.87")}`));
   console.log(center(color.muted("Type a prompt or press Tab for commands (/model, /plan, /think, /doctor)")));
