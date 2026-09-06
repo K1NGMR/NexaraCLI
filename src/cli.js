@@ -4273,10 +4273,7 @@ async function interactive(config, auth, configPath, existingState) {
     }
     activeRun = true;
     state.busy = true;
-    const userRows = userTurnRows(line, files);
-    state.prepareTranscript?.(userRows);
-    printUserTurn(line, files);
-    void runInteractiveLine(line, files, { alreadyRendered: true });
+    void runInteractiveLine(line, files, { alreadyRendered: false });
   };
 
   const onClose = () => {
