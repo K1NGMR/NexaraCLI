@@ -3874,6 +3874,11 @@ async function interactive(config, auth, configPath, existingState) {
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[${inputRow};1H`);
+      // The editor is now anchored at the first input row. Do not let a
+      // previous wrapped draft make render() move upward from this absolute
+      // position before repainting; that leaves the caret spanning/occupying
+      // the wrong row after a resize or focus return.
+      rl.resetRenderAnchor?.();
       rl.setPrompt("\u001b[38;2;204;120;92m┃\u001b[38;2;250;249;245m  \u001b[0m");
       rl.prompt();
       composerMounted = true;

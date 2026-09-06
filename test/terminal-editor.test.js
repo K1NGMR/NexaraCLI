@@ -83,6 +83,21 @@ test("pause('muted') keeps accepting keystrokes but silences redraws until resum
   assert.ok(writes > 0, "typing after resume() redraws normally again");
 });
 
+test("resetRenderAnchor prevents a stale wrapped-row offset on remount", () => {
+  const { input, output } = fakeStreams();
+  const writes = [];
+  output.write = (value) => { writes.push(String(value)); return true; };
+  const editor = createTerminalEditor({ input, output, width: () => 30, rows: () => 3 });
+  for (const char of "a very long draft that wraps") press(input, char);
+
+  writes.length = 0;
+  editor.resetRenderAnchor();
+  editor.prompt();
+
+  assert.equal(writes.some((value) => value.includes("\u001b[1A")), false);
+  assert.equal(editor.line, "a very long draft that wraps");
+});
+
 test("submitting a normal line emits 'line' and clears the buffer", () => {
   const { input, output } = fakeStreams();
   const editor = createTerminalEditor({ input, output });

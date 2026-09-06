@@ -86,6 +86,11 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     removeListener: (...args) => { events.removeListener(...args); return editor; },
     emit: (...args) => events.emit(...args),
     prompt() { render(); },
+    // The fixed composer can be removed and then painted again at an absolute
+    // row (for example after a terminal resize). The next render starts at
+    // that new anchor, so it must not replay the previous render's relative
+    // wrapped-row movement first.
+    resetRenderAnchor() { renderedRows = 1; },
     write(value, key = {}) {
       if (key?.ctrl && key.name === "u") {
         line = "";
