@@ -1673,9 +1673,8 @@ function printUserTurn(text, files = [], timestamp = null) {
   console.log();
   const lines = wrapChatText(text, Math.max(16, width - 6));
   lines.forEach((line, index) => {
-    const prefix = index === 0 ? color.blue("> ") : "  ";
     const trailer = index === lines.length - 1 ? ` ${color.dim(COPY_GLYPH)}` : "";
-    console.log(`  ${prefix}${color.cream(line)}${trailer}`);
+    console.log(`  ${color.cream(line)}${trailer}`);
   });
   if (files.length) {
     console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
