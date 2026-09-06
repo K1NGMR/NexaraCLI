@@ -521,12 +521,45 @@ const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
 const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
 const COMPOSER_INPUT_ROWS = 3;
+// The fixed-composer session patches output.write (see realContentRows below)
+// to count every newline-terminated write as real, permanent transcript
+// content, so it can re-derive the gap that keeps the composer pinned to the
+// bottom. That counter has to exclude ephemeral chrome that gets fully wiped
+// off screen again (the composer footer itself already does, via the
+// function-local "paintingBox" flag) -- but selectModelInteractive,
+// selectPermissionInteractive, and selectQuestionInteractive are plain
+// top-level functions with no access to that local flag, and their box
+// redraws/cleanup are full of embedded newlines. Every arrow-key press while
+// browsing one of those pickers was silently inflating realContentRows by a
+// full box's worth of "rows" that vanish the moment the picker closes. Once
+// inflated enough, later turns believed there was far more real content
+// above than actually exists, clamped their placement to the very bottom of
+// the transcript region, and started overwriting old rows without clearing
+// them first -- the "leftover fragment of an old message" corruption. This
+// module-level flag lets those picker functions opt the same way in, from
+// outside the session's own closure.
+let suppressRealContentRowCount = false;
 // Small "copy" affordance shown beside a committed message and in the turn
 // footer. Kept to a single BMP glyph so it renders in Windows Terminal.
 const COPY_GLYPH = "⧉";
 
 function diagnostic(text) {
   process.stderr.write(`${text}\n`);
+}
+
+// Reasoning summaries arrive as plain markdown ("**Planning the layout**")
+// but the reasoning panel is rendered as flat muted/italic text, not passed
+// through renderTerminalMarkdown like the final answer -- so the raw ** was
+// showing up literally instead of turning into emphasis. Rather than pull in
+// the full block-level renderer (headings/lists/fences make no sense for a
+// stream of short reasoning titles), just drop the emphasis markers so the
+// text reads as plain prose, matching what the markers were meant to convey.
+function stripInlineMarkdownEmphasis(text) {
+  return String(text || "")
+    .replace(/\*\*\*(.+?)\*\*\*/g, "$1")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1$2")
+    .replace(/__(.+?)__/g, "$1");
 }
 
 function activityText(status) {
@@ -560,7 +593,7 @@ function livePreviewLine(prefix, text, maxWidth, fallback) {
 }
 
 function thinkingPreviewLine(text, maxWidth) {
-  return livePreviewLine("Thinking: ", text, maxWidth, "Thinking…");
+  return livePreviewLine("Thinking: ", stripInlineMarkdownEmphasis(text), maxWidth, "Thinking…");
 }
 
 // A live truncated tail of the response as it streams in -- shown in place
@@ -786,8 +819,20 @@ async function selectQuestionInteractive(question) {
   const previousRawMode = input.isRaw;
   input.setRawMode(true);
   input.resume();
+  suppressRealContentRowCount = true;
   let lines = render();
-  output.write(`\u001b[?25l${lines.join("\n")}`);
+  // The very first draw can land with the cursor mid-line (e.g. right after
+  // the "/model" text the user just typed, or after clearComposerFooter's
+  // cursor-restore in fixed-composer mode) -- unlike redraw()/finish() below,
+  // which reset every row with an explicit carriage return, this had none,
+  // so the box top row got appended after leftover column content instead of
+  // starting fresh. On a narrow terminal that pushed the row past its width
+  // and wrapped it into an extra physical row lines.length never counted, so
+  // finish()'s cursor-up-by-(lines.length-1) stopped one row short of the
+  // real top and left a fragment (often just the top border) on screen after
+  // the picker closed. Forcing a carriage return before every row guarantees
+  // each one starts at column 0, exactly like the redraw/cleanup paths below.
+  output.write(`\u001b[?25l\r${lines.join("\n\r")}`);
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -797,6 +842,7 @@ async function selectQuestionInteractive(question) {
       input.removeListener("keypress", onKeypress);
       input.setRawMode(Boolean(previousRawMode));
       output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      suppressRealContentRowCount = false;
       if (error) reject(error);
       else resolve(value);
     };
@@ -1400,6 +1446,7 @@ async function selectWorkspaceTrust() {
   const previousRawMode = input.isRaw;
   input.setRawMode(true);
   input.resume();
+  suppressRealContentRowCount = true;
   output.write("\u001b[?25l");
   let lines = render();
   output.write(lines.join("\r\n"));
@@ -1412,6 +1459,7 @@ async function selectWorkspaceTrust() {
       input.removeListener("keypress", onKeypress);
       input.setRawMode(Boolean(previousRawMode));
       output.write("\r\n\u001b[?25h");
+      suppressRealContentRowCount = false;
       if (error) reject(error);
       else resolve(value);
     };
@@ -1542,11 +1590,11 @@ function printConversationHistory(state) {
     }
     if (!text) continue;
     printAssistantHeader(state);
-    const reasoning = (message.parts || [])
+    const reasoning = stripInlineMarkdownEmphasis((message.parts || [])
       .filter((part) => part?.type === "reasoning" || part?.type === "thinking")
       .map((part) => part.text || part.content || "")
       .join("\n")
-      .trim();
+      .trim());
     if (reasoning) {
       console.log(`  ${color.cream("▾ Thinking")}`);
       process.stdout.write(`${reasoning.split(/\r?\n/).map((line) => `    ${color.italicMuted(line)}`).join("\n")}\n\n`);
@@ -1897,8 +1945,20 @@ async function selectPermissionInteractive(currentMode, cwd = process.cwd()) {
   const previousRawMode = input.isRaw;
   input.setRawMode(true);
   input.resume();
+  suppressRealContentRowCount = true;
   let lines = render();
-  output.write(`\u001b[?25l${lines.join("\n")}`);
+  // The very first draw can land with the cursor mid-line (e.g. right after
+  // the "/model" text the user just typed, or after clearComposerFooter's
+  // cursor-restore in fixed-composer mode) -- unlike redraw()/finish() below,
+  // which reset every row with an explicit carriage return, this had none,
+  // so the box top row got appended after leftover column content instead of
+  // starting fresh. On a narrow terminal that pushed the row past its width
+  // and wrapped it into an extra physical row lines.length never counted, so
+  // finish()'s cursor-up-by-(lines.length-1) stopped one row short of the
+  // real top and left a fragment (often just the top border) on screen after
+  // the picker closed. Forcing a carriage return before every row guarantees
+  // each one starts at column 0, exactly like the redraw/cleanup paths below.
+  output.write(`\u001b[?25l\r${lines.join("\n\r")}`);
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -1908,6 +1968,7 @@ async function selectPermissionInteractive(currentMode, cwd = process.cwd()) {
       input.removeListener("keypress", onKeypress);
       input.setRawMode(Boolean(previousRawMode));
       output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      suppressRealContentRowCount = false;
       if (error) reject(error);
       else resolve(value);
     };
@@ -2004,8 +2065,20 @@ async function selectModelInteractive(selected) {
   const previousRawMode = input.isRaw;
   input.setRawMode(true);
   input.resume();
+  suppressRealContentRowCount = true;
   let lines = render();
-  output.write(`\u001b[?25l${lines.join("\n")}`);
+  // The very first draw can land with the cursor mid-line (e.g. right after
+  // the "/model" text the user just typed, or after clearComposerFooter's
+  // cursor-restore in fixed-composer mode) -- unlike redraw()/finish() below,
+  // which reset every row with an explicit carriage return, this had none,
+  // so the box top row got appended after leftover column content instead of
+  // starting fresh. On a narrow terminal that pushed the row past its width
+  // and wrapped it into an extra physical row lines.length never counted, so
+  // finish()'s cursor-up-by-(lines.length-1) stopped one row short of the
+  // real top and left a fragment (often just the top border) on screen after
+  // the picker closed. Forcing a carriage return before every row guarantees
+  // each one starts at column 0, exactly like the redraw/cleanup paths below.
+  output.write(`\u001b[?25l\r${lines.join("\n\r")}`);
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -2015,6 +2088,7 @@ async function selectModelInteractive(selected) {
       input.removeListener("keypress", onKeypress);
       input.setRawMode(Boolean(previousRawMode));
       output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      suppressRealContentRowCount = false;
       if (error) reject(error);
       else resolve(value);
     };
@@ -2563,7 +2637,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       if (state.thinkingExpanded) {
         state.prepareTranscript?.(String(state.thinkingText || "").split(/\r?\n/).length + 2);
         console.log(`  ${color.cream("▾ Thinking")}`);
-        const reasoning = String(state.thinkingText || "(waiting for reasoning…)");
+        const reasoning = stripInlineMarkdownEmphasis(String(state.thinkingText || "(waiting for reasoning…)"));
         process.stdout.write(`${reasoning.split(/\r?\n/).map((line) => `    ${color.italicMuted(line)}`).join("\n")}\n`);
         thinkingRendered = true;
       } else {
@@ -2721,7 +2795,7 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     }
     if ((responseText.trim() || String(state.thinkingText || "").trim()) && state.outputFormat !== "json" && !machine && (!quiet || state.printText)) {
       const renderedResponse = wrapRenderedTerminalMarkdown(renderTerminalMarkdown(responseText, { colorize: false }));
-      const reasoning = String(state.thinkingText || "").trim();
+      const reasoning = stripInlineMarkdownEmphasis(String(state.thinkingText || "").trim());
       if (reasoning && !thinkingRendered) {
         const reasoningLines = reasoning.split(/\r?\n/);
         state.prepareTranscript?.(reasoningLines.length + renderedResponse.split(/\r?\n/).length + 3);
@@ -2908,8 +2982,23 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
 async function continueGoal(state, goal) {
   const maxTurns = 25;
   for (let turn = 1; turn <= maxTurns; turn += 1) {
-    const result = await runPrompt(state, turn === 1 ? goal : "Continue.", { mode: "goal", goal });
-    const text = typeof result === "string" ? result : result?.text || "";
+    let text = "";
+    try {
+      const result = await runPrompt(state, turn === 1 ? goal : "Continue.", { mode: "goal", goal });
+      text = typeof result === "string" ? result : result?.text || "";
+    } catch (error) {
+      // /goal's entire point is unattended progress -- a turn throwing (a
+      // tool that briefly wasn't available, a malformed response, a dropped
+      // connection) used to propagate straight up and kill the whole loop,
+      // leaving the user staring at an idle composer with no explanation and
+      // no further attempts made. Log it and let the next iteration's
+      // "Continue." give the model a chance to see what happened (it's still
+      // in the conversation) and adjust, instead of the loop ending here.
+      // Only running out of turns (the maxTurns cap below) should stop this.
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(color.yellow(`Turn ${turn} hit an error and will retry: ${message}`));
+      continue;
+    }
     if (text.trim().endsWith("GOAL_ACHIEVED")) {
       console.log(color.green(`Goal achieved in ${turn} turn${turn === 1 ? "" : "s"}.`));
       return;
@@ -3248,7 +3337,7 @@ async function interactive(config, auth, configPath, existingState) {
   let paintingBox = false;
   const outputWrite = output.write.bind(output);
   output.write = (chunk, ...rest) => {
-    if (!paintingBox && chunk) {
+    if (!paintingBox && !suppressRealContentRowCount && chunk) {
       const str = typeof chunk === "string" ? chunk : chunk.toString();
       const segments = str.split("\n");
       const columns = Math.max(1, Number(output.columns) || 80);
@@ -3273,6 +3362,18 @@ async function interactive(config, auth, configPath, existingState) {
       crlfDelay: Infinity,
       terminal: false,
     });
+  // Without bracketed paste, a paste landed in the composer indistinguishable
+  // from real typing -- there was no way to tell "the user typed this" from
+  // "this got pasted in" (including an accidental paste of whatever a text
+  // selection elsewhere on screen had auto-copied). createTerminalEditor now
+  // detects the terminal's paste markers and emits this event; surface it so
+  // a paste is always visibly a paste, not a mystery.
+  if (typeof rl.on === "function") {
+    rl.on("paste", (text) => {
+      const chars = String(text || "").length;
+      if (chars) composerNotice(state, `Pasted ${chars} character${chars === 1 ? "" : "s"}.`, "teal");
+    });
+  }
   // selectQuestionInteractive/selectPermissionInteractive/selectModelInteractive
   // each install their OWN keypress listener on `input` rather than replacing
   // this editor's -- pause it first so the same keystroke isn't handled
@@ -3357,7 +3458,19 @@ async function interactive(config, auth, configPath, existingState) {
     const rows = Math.max(1, Math.min(transcriptBottom(), Number(reservedRows) || 1));
     const start = Math.max(1, Math.min(transcriptFlowRow, transcriptBottom() - rows + 1));
     transcriptFlowRow = Math.min(transcriptBottom(), start + rows);
-    output.write(`\u001b[1;${transcriptBottom()}r\u001b[${start};1H`);
+        output.write(`\u001b[1;${transcriptBottom()}r\u001b[${start};1H`);
+    // Rows this reserves can already hold a longer line from whatever content
+    // last occupied this exact screen position -- the transcript scroll region
+    // reuses rows once content fills the viewport (see transcriptFlowRow
+    // above). Positioning the cursor here does not erase what is already on
+    // the row, so a shorter new line only overwrites its own leading
+    // characters and leaves the old line\'s tail sitting to the right of
+    // it -- exactly the "You 11:30 AM" plus stray leftover-sentence
+    // corruption seen in practice. Clear every reserved row before handing
+    // control back to the caller, which prints its actual content starting
+    // from `start`.
+    for (let row = start; row < start + rows; row += 1) output.write(`\u001b[${row};1H\u001b[2K`);
+    output.write(`\u001b[${start};1H`);
     return start;
   };
   // The live "Processing / Thinking / Writing" line belongs in the
@@ -3643,6 +3756,33 @@ async function interactive(config, auth, configPath, existingState) {
     return `${model} ${details}`;
   }
 
+  // While a turn is busy, muteComposerRedraw() silences the input row's own
+  // relative-cursor repaint (terminal-editor.js's render()) to avoid racing
+  // the transcript's absolute-cursor writes -- typing still works and is
+  // buffered, but with zero visible feedback for however long the turn takes,
+  // which can be minutes across several tool calls. A plain "N chars typed"
+  // status line technically told the user their input wasn't lost, but that's
+  // not what was asked for -- they want to see the actual text they're
+  // typing, not a count standing in for it. Painting the real draft here is
+  // safe where calling the editor's own render() is not: this uses the same
+  // fixed absolute-row addressing (and save/restore) as the metadata/footer
+  // rows above, not relative cursor movement, so it can never desync with
+  // the transcript's own absolute writes the way the muted render() could.
+  function draftPreviewRows() {
+    const text = typeof rl?.line === "string" ? rl.line : "";
+    if (!text) return [];
+    const columns = Math.max(20, Number(output.columns) || 80);
+    const available = Math.max(1, columns - 6);
+    const chunks = [];
+    for (const segment of text.split("\n")) {
+      if (!segment.length) chunks.push("");
+      else for (let index = 0; index < segment.length; index += available) chunks.push(segment.slice(index, index + available));
+    }
+    // Show the tail -- the most recently typed text is what's actually in
+    // progress, the same reasoning the live "Thinking"/"Writing" previews use.
+    return chunks.slice(-COMPOSER_INPUT_ROWS);
+  }
+
   function fixedComposerFooterLine() {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
@@ -3667,7 +3807,29 @@ async function interactive(config, auth, configPath, existingState) {
     const width = Math.max(20, columns - 1);
     const status = shorten(fixedComposerFooterLine(), width);
     const statusRow = railRows ?? terminalRows();
+    // The metadata row only used to get repainted on mount/resize, not on
+    // this 360ms spinner tick. Redraw it here too, save/restore-wrapped
+    // exactly like the footer row below, so it stays live without touching
+    // the editor's own cursor.
+    const inputStartRow = railTop ?? transcriptBottom() + 1;
+    const metadataRow = inputStartRow + COMPOSER_INPUT_ROWS;
+    output.write(`\u001b7\u001b[${metadataRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerMetadataLine()}\u001b[0m\u001b8`);
     output.write(`\u001b7\u001b[${statusRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${status}\u001b[0m\u001b8`);
+    // The input rows themselves are muted while busy (terminal-editor.js's
+    // render() no-ops in that mode to avoid racing the transcript's own
+    // absolute-cursor writes), so without this they just stayed visually
+    // frozen -- showing nothing -- for as long as the turn ran. Paint the
+    // live draft here instead, using the same safe absolute-row addressing
+    // as the two lines above, which cannot race the muted editor's own
+    // relative-cursor math because it never touches it.
+    if (state.busy) {
+      const preview = draftPreviewRows();
+      for (let index = 0; index < COMPOSER_INPUT_ROWS; index += 1) {
+        const row = inputStartRow + index;
+        const content = preview[index] ?? "";
+        output.write(`\u001b7\u001b[${row};1H\u001b[2K  \u001b[38;2;250;249;245m${content}\u001b[0m\u001b8`);
+      }
+    }
   }
 
   function drawFixedComposerRail({ includeInput = false } = {}) {
@@ -3884,7 +4046,24 @@ async function interactive(config, auth, configPath, existingState) {
     cancelSlashSuggestionTimer();
     clearSlashSuggestions(true);
     clearBackgroundProcesses();
-    if (fixedComposer) output.write("\u001b[r\u001b[0m\r\n");
+    if (fixedComposer) {
+      // The rail (border, model line, input box) was drawn with absolute
+      // cursor addressing near the bottom of the screen -- resetting the
+      // scroll region only lets FUTURE output scroll through those rows
+      // again, it does not erase what is already printed there. Since this
+      // CLI deliberately stays in the primary screen buffer (see
+      // enterTerminalScreen above, for scrollback), there is no alt-screen
+      // exit to wipe the slate clean either -- so without an explicit clear
+      // here, the whole rail stayed visibly printed on screen after exit,
+      // and the real shell's next prompt landed overlapping it instead
+      // of on a clean line.
+      const railTopRow = transcriptBottom() + 1;
+      const railBottomRow = terminalRows();
+      let cleanup = `\u001b[r`;
+      for (let row = railTopRow; row <= railBottomRow; row += 1) cleanup += `\u001b[${row};1H\u001b[2K`;
+      cleanup += `\u001b[${railTopRow};1H\u001b[0m\r\n`;
+      output.write(cleanup);
+    }
     rl.close();
   }
 }

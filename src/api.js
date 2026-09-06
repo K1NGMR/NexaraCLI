@@ -192,6 +192,16 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
       onText(delta);
     }
   } else if (type === "reasoning-start") {
+    // A turn can emit several distinct reasoning summary blocks (one
+    // reasoning-start per block), each already its own short markdown-bold
+    // title. Nothing separated them before, so the previous block's closing
+    // "**" landed directly against the next one's opening "**" -- rendered as
+    // a garbled "****" run instead of two separate thoughts. Insert a blank
+    // line at each new block's start (but not before the very first one).
+    if (state.reasoning && state.reasoning.trim() && !/\n\n$/.test(state.reasoning)) {
+      state.reasoning += "\n\n";
+      onReasoning?.("\n\n");
+    }
     onStatus?.("thinking");
   } else if (type === "reasoning-delta" || type === "reasoning") {
     const delta = event.delta ?? event.text ?? event.value ?? "";

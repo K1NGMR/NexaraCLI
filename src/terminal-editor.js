@@ -49,6 +49,25 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   //    brief stretch.
   let inputMode = "active";
 
+  // Bracketed paste: without this, a paste (Ctrl+V, right-click-paste --
+  // Windows Terminal's default right-click action -- or even an accidental
+  // paste of whatever was last auto-copied by a text selection) arrives as
+  // plain bytes indistinguishable from real typing. Every pasted character
+  // gets fed through the same one-at-a-time keypress path as a keystroke, so
+  // it silently appears in the composer with zero indication it was a paste,
+  // not something the user typed -- exactly the "text appeared out of
+  // nowhere" report this was built to fix. Enabling this mode (below) makes
+  // a compliant terminal wrap paste content in ESC[200~ ... ESC[201~ markers.
+  // node:readline's own keypress decoder already recognizes those markers
+  // as dedicated key.name "paste-start"/"paste-end" events (confirmed by
+  // feeding it real bracketed-paste bytes directly) -- so this is handled
+  // entirely inside onKeypress below, buffering the ordinary keypress events
+  // that arrive in between and flushing them as one atomic insert, with a
+  // "paste" event emitted so the caller can show a confirmation notice.
+  const ESC = String.fromCharCode(27);
+  let pasting = false;
+  let pasteBuffer = "";
+
   const editor = {
     get line() { return line; },
     get closed() { return closed; },
@@ -104,6 +123,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       questionRejecter = null;
       if (input.isTTY && typeof input.setRawMode === "function") input.setRawMode(Boolean(rawBefore));
       input.removeListener("keypress", onKeypress);
+      if (output.isTTY) output.write(`${ESC}[?2004l`);
       output.write("\u001b[?25h\u001b[0m\r\n");
       events.emit("close");
     },
@@ -187,6 +207,42 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   function onKeypress(str, key = {}) {
     if (closed || inputMode === "blocked") return;
     const name = String(key.name || "").toLowerCase();
+    // node:readline's own decoder recognizes the bracketed-paste boundary
+    // sequences (ESC[200~ / ESC[201~) as these two dedicated key names --
+    // verified directly against a real readline keypress stream, not
+    // assumed -- rather than splitting them into individual characters like
+    // ordinary text. Toggle paste-buffering right here in the same handler
+    // that receives every keypress event for the pasted characters in
+    // between, so there is no second listener racing this one over the
+    // same bytes (an earlier version tried a parallel raw "data" listener and
+    // hit exactly that race: both fired for the same chunk and the paste
+    // landed in the line twice, markers and all).
+    if (name === "paste-start") { pasting = true; pasteBuffer = ""; return; }
+    if (name === "paste-end") {
+      pasting = false;
+      const pasted = pasteBuffer;
+      pasteBuffer = "";
+      if (pasted) {
+        line = `${line.slice(0, cursor)}${pasted}${line.slice(cursor)}`;
+        cursor += pasted.length;
+        events.emit("paste", pasted);
+      }
+      render();
+      return;
+    }
+    if (pasting) {
+      // Buffer verbatim, including characters that would otherwise be
+      // special (Enter, Ctrl+U, ...) -- a multi-line paste must not submit
+      // partway through just because it contains a newline. A raw CR
+      // arrives with str populated too, so it needs an explicit check here
+      // or it would keep the literal CR instead of becoming the LF
+      // render()'s row-splitting already understands. Any other control
+      // byte is dropped, matching the filter ordinary typing already
+      // applies below.
+      if (str === "\r" || str === "\n" || key.sequence === "\r" || key.sequence === "\n") pasteBuffer += "\n";
+      else if (str && str.length && str.charCodeAt(0) >= 32 && str.charCodeAt(0) !== 127) pasteBuffer += str;
+      return;
+    }
     const sequence = key.sequence || str || "";
     if (key.ctrl && name === "c") return;
     if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
@@ -210,7 +266,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     if (name === "home" || (key.ctrl && name === "a")) { cursor = 0; render(); return; }
     if (name === "end" || (key.ctrl && name === "e")) { cursor = line.length; render(); return; }
     if (key.ctrl && name === "u") { line = ""; cursor = 0; render(); return; }
-    if (key.ctrl || key.meta || key.alt || !str || /[\u0000-\u001f\u007f]/.test(str)) return;
+    if (key.ctrl || key.meta || key.alt || !str || str.charCodeAt(0) < 32 || str.charCodeAt(0) === 127) return;
     line = `${line.slice(0, cursor)}${str}${line.slice(cursor)}`;
     cursor += str.length;
     render();
@@ -223,6 +279,10 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     input.resume();
   }
   input.on("keypress", onKeypress);
+  // Ask the terminal to wrap paste content in ESC[200~ ... ESC[201~ markers
+  // (see the "Bracketed paste" comment above) instead of sending it as
+  // indistinguishable-from-typed raw bytes.
+  if (output.isTTY) output.write(`${ESC}[?2004h`);
   output.write("\u001b[?25h");
   return editor;
 }
