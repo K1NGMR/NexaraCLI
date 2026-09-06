@@ -192,7 +192,6 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       const cursorOffset = currentPrompt.length + cursorCol;
       if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
       renderedRows = visibleRows;
-      events.emit("change", line);
       return;
     }
     // Return to the top of the previous render, clear only the editor rows,

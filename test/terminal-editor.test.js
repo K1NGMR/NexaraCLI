@@ -113,6 +113,19 @@ test("renderAt repaints muted type-ahead without relative cursor movement", () =
   assert.equal(writes.some((value) => value.includes("\u001b[1A")), false);
 });
 
+test("renderAt does not emit a recursive change event", () => {
+  const { input, output } = fakeStreams();
+  const editor = createTerminalEditor({ input, output });
+  let changes = 0;
+  editor.on("change", () => { changes += 1; });
+  editor.pause("muted");
+  press(input, "x");
+  assert.equal(changes, 1);
+  changes = 0;
+  editor.renderAt(8);
+  assert.equal(changes, 0);
+});
+
 test("submitting a normal line emits 'line' and clears the buffer", () => {
   const { input, output } = fakeStreams();
   const editor = createTerminalEditor({ input, output });
