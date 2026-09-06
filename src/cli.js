@@ -4355,20 +4355,10 @@ async function interactive(config, auth, configPath, existingState) {
     clearSlashSuggestions(true);
     clearBackgroundProcesses();
     if (fixedComposer) {
-      // The rail (border, model line, input box) was drawn with absolute
-      // cursor addressing near the bottom of the screen -- resetting the
-      // scroll region only lets FUTURE output scroll through those rows
-      // again, it does not erase what is already printed there. Since this
-      // CLI deliberately stays in the primary screen buffer (see
-      // enterTerminalScreen above, for scrollback), there is no alt-screen
-      // exit to wipe the slate clean either -- so without an explicit clear
-      // here, the whole rail stayed visibly printed on screen after exit,
-      // and the real shell's next prompt landed overlapping it instead
-      // of on a clean line.
-      const railTopRow = transcriptBottom() + 1;
-      const railBottomRow = terminalRows();
+      const railTopRow = Math.max(1, transcriptBottom() + 1);
+      const totalRows = Math.max(railTopRow + 3, Number(output.rows) || 24);
       let cleanup = `\u001b[r`;
-      for (let row = railTopRow; row <= railBottomRow; row += 1) cleanup += `\u001b[${row};1H\u001b[2K`;
+      for (let row = railTopRow; row <= totalRows; row += 1) cleanup += `\u001b[${row};1H\u001b[2K`;
       cleanup += `\u001b[${railTopRow};1H\u001b[0m\r\n`;
       output.write(cleanup);
     }
