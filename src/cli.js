@@ -1246,21 +1246,22 @@ function todoProgressBar(todos, width = 18) {
 
 function printTodoList(todos, { compact = false, state = null } = {}) {
   if (!Array.isArray(todos) || !todos.length) return;
-  const width = Math.max(36, terminalWidth() - 4);
-  const innerWidth = width - 4; // width inside border vertical bars
+  // Use a fixed max width so the task board is a neat card, not stretched across 200+ cols
+  const boxWidth = Math.min(68, Math.max(36, terminalWidth() - 6));
+  const innerWidth = boxWidth - 4; // width inside border vertical bars
 
-  // Build every line of the box as a clean string first
   const boxLines = [];
   const heading = compact ? "TASK BOARD" : "TASK BOARD UPDATED";
-  const topBar = `  ${color.dim("╭─")} ${color.cream(heading)} ${color.dim("─".repeat(Math.max(1, innerWidth - heading.length - 2)))}${color.dim("╮")}`;
-  boxLines.push(topBar);
+  const topFill = Math.max(1, innerWidth - heading.length - 2);
+  boxLines.push(`  ${color.coral("╭─")} ${color.cream(heading)} ${color.coral("─".repeat(topFill))}${color.coral("╮")}`);
 
-  const summaryStr = `${todoSummary(todos)}  ${todoProgressBar(todos)}`;
-  const summaryPad = Math.max(0, innerWidth - visibleLength(summaryStr));
-  boxLines.push(`  ${color.dim("│")} ${color.muted(todoSummary(todos))}  ${todoProgressBar(todos)}${" ".repeat(summaryPad)}${color.dim("│")}`);
+  const summary = todoSummary(todos);
+  const bar = todoProgressBar(todos, 14);
+  const summaryTextLen = visibleLength(summary) + 2 + 14;
+  const summaryPad = Math.max(0, innerWidth - summaryTextLen);
+  boxLines.push(`  ${color.coral("│")} ${color.muted(summary)}  ${bar}${" ".repeat(summaryPad)}${color.coral("│")}`);
 
-  const midBar = `  ${color.dim("├─")} ${color.dim("WORKSTREAMS")} ${color.dim("─".repeat(Math.max(1, innerWidth - 13)))}${color.dim("┤")}`;
-  boxLines.push(midBar);
+  boxLines.push(`  ${color.coral("├─")} ${color.dim("WORKSTREAMS")} ${color.coral("─".repeat(Math.max(1, innerWidth - 13)))}${color.coral("┤")}`);
 
   const groups = ["in_progress", "pending", "completed", "cancelled"];
   for (const status of groups) {
@@ -1270,27 +1271,29 @@ function printTodoList(todos, { compact = false, state = null } = {}) {
       : status === "in_progress" ? color.coral
         : status === "cancelled" ? color.red : color.amber;
     
-    const headerStr = `${todoStatusLabel(status)} · ${entries.length}`;
-    const headerPad = Math.max(0, innerWidth - (todoStatusLabel(status).length + 3 + String(entries.length).length));
-    boxLines.push(`  ${color.dim("│")} ${statusColor(todoStatusLabel(status))} ${color.dim(`· ${entries.length}`)}${" ".repeat(headerPad)}${color.dim("│")}`);
+    const statusLabel = todoStatusLabel(status);
+    const countLabel = `· ${entries.length}`;
+    const headerVisibleLen = statusLabel.length + 1 + countLabel.length;
+    const headerPad = Math.max(0, innerWidth - headerVisibleLen);
+    boxLines.push(`  ${color.coral("│")} ${statusColor(statusLabel)} ${color.dim(countLabel)}${" ".repeat(headerPad)}${color.coral("│")}`);
 
     for (const { todo, index } of entries) {
-      const rows = wrapChatText(todo.content, Math.max(20, innerWidth - 11));
+      const rows = wrapChatText(todo.content, Math.max(16, innerWidth - 8));
       const marker = todoStatusGlyph(todo.status);
       rows.forEach((row, rowIndex) => {
-        const prefixVisibleLen = rowIndex === 0 ? 8 : 10;
+        const prefixVisibleLen = rowIndex === 0 ? 5 : 5;
         const prefixStr = rowIndex === 0
-          ? `${marker} ${color.muted(String(index + 1).padStart(2, "0"))} ${color.dim("│")} `
-          : "          ";
+          ? `${marker} ${color.muted(String(index + 1).padStart(2, "0"))} `
+          : "      ";
         const contentLen = visibleLength(row);
         const rowPad = Math.max(0, innerWidth - prefixVisibleLen - contentLen);
-        boxLines.push(`  ${color.dim("│")} ${prefixStr}${color.cream(row)}${" ".repeat(rowPad)}${color.dim("│")}`);
+        boxLines.push(`  ${color.coral("│")} ${prefixStr}${color.cream(row)}${" ".repeat(rowPad)}${color.coral("│")}`);
       });
     }
   }
 
-  const footerBar = `  ${color.dim("╰─")} ${color.dim("Updated by Nexara")} ${color.dim("─".repeat(Math.max(1, innerWidth - 20)))}${color.dim("╯")}`;
-  boxLines.push(footerBar);
+  const footerFill = Math.max(1, innerWidth - 19);
+  boxLines.push(`  ${color.coral("╰─")} ${color.dim("Updated by Nexara")} ${color.coral("─".repeat(footerFill))}${color.coral("╯")}`);
 
   if (state) {
     state.prepareTranscript?.(boxLines.length);
