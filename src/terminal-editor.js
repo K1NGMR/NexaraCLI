@@ -188,16 +188,14 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     const visibleCursorRow = Math.max(0, cursorRow - firstRow);
     const visibleRows = Math.max(1, visibleChunks.length);
     if (Number.isInteger(absoluteRow) && absoluteRow > 0) {
-      const rowsToClear = Math.max(renderedRows, visibleRows);
-      for (let index = 0; index < rowsToClear; index += 1) {
-        const row = absoluteRow + index;
-        const content = index < visibleRows ? `${currentPrompt}${visibleChunks[index]}` : "";
-        output.write(`\u001b[${row};1H\u001b[2K${content}`);
-      }
-      output.write(`\u001b[${absoluteRow + visibleCursorRow};1H`);
-      const cursorOffset = currentPrompt.length + cursorCol;
-      if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
-      renderedRows = visibleRows;
+      const row = absoluteRow;
+      const visible = visibleChunks[0] || "";
+      const promptFormatted = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
+      const textFormatted = `\u001b[38;2;250;249;245m${visible}\u001b[0m`;
+      output.write(`\u001b[${row};1H\u001b[2K${promptFormatted}${textFormatted}`);
+      const targetCol = currentPrompt.length + cursorCol + 1;
+      output.write(`\u001b[${row};${targetCol}H`);
+      renderedRows = 1;
       return;
     }
     // Return to the top of the previous render, clear only the editor rows,
