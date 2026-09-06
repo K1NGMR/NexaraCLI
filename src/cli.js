@@ -1122,6 +1122,28 @@ function printModelChangeMessage(modelName, effort = "", state = null) {
   if (state) (state.scheduleMountComposer || state.mountComposer)?.();
 }
 
+function toolDiffBadge(name, args = {}) {
+  const cleanName = formatToolName(name);
+  if (cleanName === "Write") {
+    const content = String(args.content || args.code || args.file_contents || "");
+    const added = content ? content.split(/\r?\n/).length : 0;
+    if (added > 0) return ` ${color.dim("(")}${color.green(`+${added}`)}${color.dim(")")}`;
+    return "";
+  }
+  if (cleanName === "Edit") {
+    const newText = String(args.replacementContent || args.new_content || args.replacement || "");
+    const oldText = String(args.targetContent || args.old_content || args.target || "");
+    const added = newText ? newText.split(/\r?\n/).length : 0;
+    const removed = oldText ? oldText.split(/\r?\n/).length : 0;
+    const parts = [];
+    if (added > 0) parts.push(color.green(`+${added}`));
+    if (removed > 0) parts.push(color.red(`-${removed}`));
+    if (parts.length) return ` ${color.dim("(")}${parts.join(" ")}${color.dim(")")}`;
+    return "";
+  }
+  return "";
+}
+
 function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}) {
   if (streamJson || !call) return;
   if (state) {
@@ -1134,8 +1156,9 @@ function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}
   const toolNameYellow = color.yellow(formatToolName(name));
   const paramStr = formatToolParamSummary(name, args, cwd);
   const paramFormatted = paramStr ? `(${paramStr})` : "";
+  const diffBadge = toolDiffBadge(name, args);
 
-  console.log(`  ${color.blue("●")} ${toolNameYellow}${paramFormatted}`);
+  console.log(`  ${color.blue("●")} ${toolNameYellow}${paramFormatted}${diffBadge}`);
 
   if (state) (state.scheduleMountComposer || state.mountComposer)?.();
 }
