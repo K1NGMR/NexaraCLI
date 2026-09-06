@@ -69,7 +69,9 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   let pasting = false;
   let pasteBuffer = "";
 
-  const editor = {
+    let fixedRow = null;
+
+    const editor = {
     get line() { return line; },
     get closed() { return closed; },
     pause(mode = "blocked") { inputMode = mode; },
@@ -86,6 +88,9 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       line = String(value ?? "");
       cursor = line.length;
       render();
+    },
+    setFixedRow(row) {
+      fixedRow = Number.isInteger(row) && row > 0 ? row : null;
     },
     setBeforeSubmit(handler) { beforeSubmit = typeof handler === "function" ? handler : null; },
     on: (...args) => { events.on(...args); return editor; },
@@ -149,7 +154,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
 
   function render() {
     if (closed) return;
-    const absoluteRow = arguments.length ? Number(arguments[0]) : null;
+    const absoluteRow = arguments.length ? Number(arguments[0]) : fixedRow;
     if (inputMode === "muted" && !Number.isInteger(absoluteRow)) {
       events.emit("change", line);
       return;
