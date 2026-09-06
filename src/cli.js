@@ -1785,7 +1785,7 @@ function userTurnLine(text) {
 function userTurnRows(text, files = []) {
   const width = Math.max(20, terminalWidth());
   const wrappedLines = wrapChatText(text, Math.max(16, width - 6));
-  return 1 + wrappedLines.length + (files.length ? 1 : 0) + 1;
+  return 1 + wrappedLines.length + (files.length ? 1 : 0);
 }
 
 function printUserTurn(text, files = [], timestamp = null) {
@@ -1803,7 +1803,6 @@ function printUserTurn(text, files = [], timestamp = null) {
 
 function printAssistantHeader(state, mode) {
   const model = modelLabel(state?.config?.selectedModel);
-  console.log();
   console.log(`  ${color.coral("Nexara")} ${color.dim(`· ${model}`)}`);
 }
 
