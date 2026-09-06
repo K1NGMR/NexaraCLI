@@ -34,7 +34,24 @@ jobs:
         run: npm run check
 
       - name: Run test suite
-        run: npm test
+        shell: bash
+        run: |
+          set +e
+          npm test > test-output.log 2>&1
+          exit_code=$?
+          cat test-output.log
+          if [ "$exit_code" -ne 0 ]; then
+            # See release.yml's identical step for why this exists: the raw
+            # job log needs an authenticated GitHub session to view, so a
+            # CI-only failure was otherwise invisible to anyone without repo
+            # access. ::error:: annotations render on the public run summary
+            # with no sign-in required.
+            tail -n 40 test-output.log | while IFS= read -r line; do
+              sanitized="${line//$'\r'/}"
+              echo "::error::${sanitized}"
+            done
+          fi
+          exit $exit_code
 
       - name: Verify packaged installation
         run: npm run pack:smoke

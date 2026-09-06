@@ -18,7 +18,29 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm test
+      - name: Run test suite
+        shell: bash
+        run: |
+          set +e
+          npm test > test-output.log 2>&1
+          exit_code=$?
+          cat test-output.log
+          if [ "$exit_code" -ne 0 ]; then
+            # The raw job log requires an authenticated GitHub session to
+            # view, which made a CI-only test failure completely opaque from
+            # outside that session -- no way to see WHY npm test failed
+            # short of asking someone with repo access to open the run and
+            # copy-paste it. Annotations (::error::) are rendered on the
+            # PUBLIC run summary page with no sign-in required, so mirror the
+            # failing output there too. GitHub caps how many of these render,
+            # so only the tail (where the actual failure/exception is) goes
+            # through, not the full passing-tests output above it.
+            tail -n 40 test-output.log | while IFS= read -r line; do
+              sanitized="${line//$'\r'/}"
+              echo "::error::${sanitized}"
+            done
+          fi
+          exit $exit_code
       - run: npm pack --silent
       - name: Create checksum manifest
         shell: bash
