@@ -3943,6 +3943,24 @@ async function interactive(config, auth, configPath, existingState) {
     resizeSettleTimer = setTimeout(() => {
       resizeSettleTimer = null;
       if (closing || rl.closed || !composerMounted) return;
+      // If the terminal got SHORTER, the rail's fixed position (anchored to
+      // the bottom) moves UP to stay pinned there -- directly into rows that
+      // may still hold real transcript content (an assistant reply, e.g.)
+      // printed back when the terminal was taller. clearComposerFooter()
+      // below only knows to erase the rail's OWN last-drawn rows, and
+      // showComposer() draws the new, smaller one starting higher up the
+      // screen -- neither one has any notion of "real conversation content
+      // used to live here," so drawFixedComposerRail's own row-clearing
+      // silently wiped it with no way to get it back. A plain burst of
+      // newlines scrolls the whole screen up by the shrink amount first
+      // (the terminal's own natural scroll, not a clear) so whatever was
+      // sitting in those rows moves into scrollback intact instead of being
+      // destroyed by the rail redraw that follows.
+      const previousInputStartRow = railTop;
+      const newInputStartRow = transcriptBottom() + 1;
+      if (previousInputStartRow != null && newInputStartRow < previousInputStartRow) {
+        output.write("\n".repeat(previousInputStartRow - newInputStartRow));
+      }
       // Redraw the box at its new width so a live resize does not leave a
       // stale-width rule or status line behind -- this cannot use absolute
       // addressing or a scroll region (see the fixedComposer note above), so
