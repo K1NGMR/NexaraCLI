@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { emitKeypressEvents } from "node:readline";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -497,6 +498,7 @@ const color = {
   coralActive: rgb(169, 88, 62),
   cream: rgb(250, 249, 245),
   muted: rgb(160, 157, 150),
+  lightGray: rgb(195, 195, 195),
   teal: rgb(93, 184, 166),
   amber: rgb(232, 165, 90),
   red: rgb(198, 69, 69),
@@ -506,9 +508,9 @@ const color = {
   green: rgb(93, 184, 114),
   yellow: rgb(212, 160, 23),
   // Compatibility aliases retained while commands transition to the palette.
-  cyan: rgb(204, 120, 92),
+  cyan: rgb(88, 166, 255),
   white: rgb(250, 249, 245),
-  blue: rgb(93, 184, 166),
+  blue: rgb(88, 166, 255),
   magenta: rgb(204, 120, 92),
   // Kept as aliases for older rendering paths, but deliberately mapped to
   // Nexara's warm coral/cream system instead of the old neon green terminal
@@ -1057,44 +1059,104 @@ function toolArgumentPreview(name, args = {}) {
   return "";
 }
 
-function printToolCall(call, { streamJson = false } = {}) {
-  const name = String(call?.name || "tool");
-  const preview = toolArgumentPreview(name, call?.arguments || {});
-  if (streamJson) return;
-  const verb = ({
-    ReadFile: "Reading",
-    ListFiles: "Listing",
-    SearchFiles: "Searching",
-    RunCommand: "Running",
-    WriteFile: "Writing",
-    EditFile: "Editing",
-    CheckPort: "Checking",
-    ask_question: "Asking",
-  })[name] || `Using ${name}`;
-  console.log(`  ${color.muted("┊")} ${color.coral("◆")} ${color.cream(verb)}${color.dim(preview ? `  ${preview}` : "")}`);
+function formatToolName(name) {
+  const clean = String(name || "tool").trim();
+  const mapping = {
+    ReadFile: "Read",
+    WriteFile: "Write",
+    EditFile: "Edit",
+    ListFiles: "List",
+    SearchFiles: "Search",
+    RunCommand: "Bash",
+    CheckPort: "CheckPort",
+    ask_question: "AskQuestion",
+    TodoWrite: "TodoWrite",
+  };
+  return mapping[clean] || clean;
 }
 
-function printToolResult(name, result, { error = false, streamJson = false } = {}) {
+function formatPathWithTilde(filepath, cwd) {
+  if (typeof filepath !== "string" || !filepath.trim()) return "";
+  let str = filepath.trim();
+  try {
+    const home = os.homedir();
+    if (home && (str.startsWith(home) || str.toLowerCase().startsWith(home.toLowerCase()))) {
+      str = "~" + str.slice(home.length);
+    } else if (cwd && (str.startsWith(cwd) || str.toLowerCase().startsWith(cwd.toLowerCase()))) {
+      const rel = str.slice(cwd.length).replace(/^[/\\]+/, "");
+      if (rel) str = rel;
+    }
+  } catch {}
+  return str.replaceAll("\\", "/");
+}
+
+function formatToolParamSummary(name, args = {}, cwd = "") {
+  const pathVal = args.file_path || args.path || args.filePath || args.dir || args.target;
+  if (pathVal && typeof pathVal === "string") {
+    return formatPathWithTilde(pathVal, cwd);
+  }
+  if (args.command && typeof args.command === "string") {
+    return shorten(args.command.trim().replaceAll("\n", " "), 60);
+  }
+  if (args.pattern && typeof args.pattern === "string") {
+    return args.pattern.trim();
+  }
+  if (args.query && typeof args.query === "string") {
+    return args.query.trim();
+  }
+  if (args.url && typeof args.url === "string") {
+    return args.url.trim();
+  }
+  if (name === "CheckPort" && args.port) {
+    return `${args.host || "127.0.0.1"}:${args.port}`;
+  }
+  const fallback = toolArgumentPreview(name, args);
+  return fallback ? formatPathWithTilde(fallback, cwd) : "";
+}
+
+function printToolCall(call, { streamJson = false } = {}) {
+  if (streamJson) return;
+}
+
+function printToolResult(name, result, { args = {}, cwd = "", error = false, streamJson = false, state = null } = {}) {
   const text = String(result || "").trim();
   if (streamJson) return;
-  const label = error ? color.red("×") : color.teal("✓");
-  const lines = text ? wrapChatText(text, Math.max(32, terminalWidth() - 9)) : ["completed"];
-  // Tool output is part of the transcript, not a one-line status preview.
-  // The old renderer silently kept only the first line for most tools and
-  // capped the rest at eight lines for a small allow-list, which made tools
-  // such as ListFiles look as if they returned only one result. Render every
-  // returned line, wrapping long lines to the current terminal width.
-  console.log(`  ${color.muted("┊")} ${label} ${color.muted(`${name} ${error ? "failed" : "done"}`)}`);
-  // Edit's result appends a plain "-"/"+" prefixed diff (see diffBlock in
-  // tools.js) -- colored HERE, after wrapping, rather than at the source:
-  // wrapChatText wraps by raw character position, which would slice through
-  // an embedded ANSI escape sequence on a long line and corrupt the output.
-  const isDiffLine = name === "Edit" && !error;
-  for (const line of lines) {
-    if (isDiffLine && line.startsWith("- ")) console.log(`       ${color.red(line)}`);
-    else if (isDiffLine && line.startsWith("+ ")) console.log(`       ${color.green(line)}`);
-    else console.log(`       ${color.dim(line)}`);
+
+  const circle = error ? color.red("●") : color.blue("●");
+  const toolNameYellow = color.yellow(formatToolName(name));
+  const paramStr = formatToolParamSummary(name, args, cwd);
+  const paramFormatted = paramStr ? `(${paramStr})` : "";
+  const expandHint = color.dim(" (ctrl+o to expand)");
+
+  console.log(`  ${circle} ${toolNameYellow}${paramFormatted}${expandHint}`);
+
+  if (error && text) {
+    const firstLine = text.split("\n")[0] || text;
+    console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(firstLine)}`);
   }
+
+  if (state) {
+    state.lastToolResults ??= [];
+    state.lastToolResults.push({ name, paramStr, result: text, error, expanded: false });
+  }
+}
+
+function toggleExpandLastToolResult(state) {
+  if (!state?.lastToolResults || !state.lastToolResults.length) return;
+  const last = state.lastToolResults[state.lastToolResults.length - 1];
+  last.expanded = !last.expanded;
+  state.clearComposer?.();
+  if (last.expanded) {
+    console.log(`\n  ${last.error ? color.red("●") : color.blue("●")} ${color.yellow(formatToolName(last.name))}${last.paramStr ? `(${last.paramStr})` : ""} ${color.dim("(expanded)")}`);
+    const lines = wrapChatText(last.result, Math.max(32, terminalWidth() - 9));
+    for (const line of lines) {
+      console.log(`       ${color.dim(line)}`);
+    }
+    console.log("");
+  } else {
+    console.log(`  ${color.dim("(collapsed)")}`);
+  }
+  state.mountComposer?.();
 }
 
 function normalizeCliTodos(rawTodos) {
@@ -1304,7 +1366,7 @@ async function runClientTool(state, call, signal) {
   const decision = toolAccessDecision(state, name);
   if (decision.action === "deny") {
     const message = `Tool ${name} was denied (${decision.reason}).`;
-    printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
+    printToolResult(name, message, { error: true, args, cwd: state.cwd, streamJson: state.outputFormat === "stream-json", state });
     return message;
   }
   const outsidePaths = toolPaths(name, args, state.cwd).filter((value) => value);
@@ -1322,7 +1384,7 @@ async function runClientTool(state, call, signal) {
     const approved = await requestToolApproval(state, name, args, { outsidePaths });
     if (!approved) {
       const message = `Tool ${name} was denied by the user.`;
-      printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
+      printToolResult(name, message, { error: true, args, cwd: state.cwd, streamJson: state.outputFormat === "stream-json", state });
       return message;
     }
     if (outsideApprovalRequired && outsideActionKey && effectivePermissionMode(state) !== "sandboxed") {
@@ -1332,7 +1394,7 @@ async function runClientTool(state, call, signal) {
   }
   if (signal?.aborted) {
     const message = `Tool ${name} was cancelled before it started.`;
-    printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
+    printToolResult(name, message, { error: true, args, cwd: state.cwd, streamJson: state.outputFormat === "stream-json", state });
     return message;
   }
   try {
@@ -1342,11 +1404,11 @@ async function runClientTool(state, call, signal) {
       if (state.outputFormat !== "stream-json") printTodoList(state.todos);
       outputToolEvent(state, { type: "todo-update", todos: state.todos });
     }
-    printToolResult(name, result, { streamJson: state.outputFormat === "stream-json" });
+    printToolResult(name, result, { args, cwd: state.cwd, streamJson: state.outputFormat === "stream-json", state });
     return result;
   } catch (error) {
     const message = `Tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`;
-    printToolResult(name, message, { error: true, streamJson: state.outputFormat === "stream-json" });
+    printToolResult(name, message, { error: true, args, cwd: state.cwd, streamJson: state.outputFormat === "stream-json", state });
     return message;
   }
 }
@@ -1570,31 +1632,34 @@ function userTurnLine(text) {
 // one constant so userTurnRows() (which prepareTranscript() uses to reserve
 // exactly the right number of rows) can never drift out of sync with what
 // printUserTurn() actually writes.
-const USER_TURN_LEADING_GAP_ROWS = 2;
+function printModelChangeMessage(modelName, effort = "") {
+  const effortLabel = effort ? ` (${REASONING_EFFORT_LABELS[effort] || effort})` : "";
+  console.log(`  ${color.blue("> /model")}`);
+  console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(`Model set to ${modelName}${effortLabel}`)}`);
+}
 
 function userTurnRows(text, files = []) {
-  // leading gap rows + timestamp row + wrapped body rows + optional
-  // attachment row + the single blank separator printed below. Kept in one
-  // place so prepareTranscript() reserves exactly what printUserTurn()
-  // writes -- a mismatch here is what previously produced either a stale
-  // gap or corrupted redraw between a submitted message and its response.
-  return USER_TURN_LEADING_GAP_ROWS + 1 + wrapChatText(text).length + (files.length ? 1 : 0) + 1;
+  const width = Math.max(20, terminalWidth());
+  const wrappedLines = wrapChatText(text, Math.max(16, width - 6));
+  return 6 + wrappedLines.length + (files.length ? 1 : 0);
 }
 
 function printUserTurn(text, files = [], timestamp = null) {
-  for (let i = 0; i < USER_TURN_LEADING_GAP_ROWS; i += 1) console.log();
-  const stamp = timestamp
-    ? new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  console.log(`  ${color.coral("You")} ${color.dim(stamp)}`);
-  const lines = wrapChatText(text);
+  const width = Math.max(20, terminalWidth());
+  console.log();
+  console.log(color.blue("─".repeat(width)));
+  console.log();
+  const lines = wrapChatText(text, Math.max(16, width - 6));
   lines.forEach((line, index) => {
+    const prefix = index === 0 ? color.blue("> ") : "  ";
     const trailer = index === lines.length - 1 ? ` ${color.dim(COPY_GLYPH)}` : "";
-    console.log(`  ${color.coral("│")} ${color.italicCream(line)}${trailer}`);
+    console.log(`  ${prefix}${color.cream(line)}${trailer}`);
   });
   if (files.length) {
     console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
   }
+  console.log();
+  console.log(color.blue("─".repeat(width)));
   console.log();
 }
 
@@ -3069,17 +3134,17 @@ async function handleSlash(state, line) {
         if (!choice?.model) return true;
         if (choice.sessionOnly) {
           state.config = { ...state.config, selectedModel: choice.model };
-          notice(`Using ${color.cream(modelLabel(choice.model))} for this session only.`);
+          printModelChangeMessage(modelLabel(choice.model), state.config.selectedReasoningEffort);
         } else {
           state.config = { ...state.config, ...saveConfig({ selectedModel: choice.model }) };
-          notice(`Default model set to ${color.cream(modelLabel(choice.model))}.`);
+          printModelChangeMessage(modelLabel(choice.model), state.config.selectedReasoningEffort);
         }
         return true;
       }
       const model = resolveModel(argument);
       if (!model) { console.log(color.red(`No exact model match for “${argument}”.`)); printModels(state.config.selectedModel, argument); return true; }
       state.config = { ...state.config, ...saveConfig({ selectedModel: model }) };
-      notice(`Model switched to ${color.cream(modelLabel(model))}.`);
+      printModelChangeMessage(modelLabel(model), state.config.selectedReasoningEffort);
       return true;
     }
     case "/effort": {
@@ -3777,6 +3842,10 @@ async function interactive(config, auth, configPath, existingState) {
     if (state.modalOpen) return;
     if (key?.ctrl && key.name === "c") {
       if (state.cancelCurrent) state.cancelCurrent();
+      return;
+    }
+    if (key?.ctrl && key.name === "o") {
+      toggleExpandLastToolResult(state);
       return;
     }
   };
