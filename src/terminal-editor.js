@@ -18,7 +18,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     ({ line, cursor } = stashedDraft);
     stashedDraft = null;
   };
-  let currentPrompt = "┃  ";
+  let currentPrompt = "›  ";
   let rawBefore = false;
   let renderedRows = 1;
   // A modal picker (question/permission/model) installs its OWN keypress
@@ -80,7 +80,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     getCursorPos() { return { cols: currentPrompt.length + cursor, rows: 0 }; },
     setPrompt(value) {
       // Strip styling from the prompt and retain the visible glyphs only.
-      currentPrompt = String(value || "┃  ").replace(/\u001b\[[0-9;]*m/g, "");
+      currentPrompt = String(value || "›  ").replace(/\u001b\[[0-9;]*m/g, "");
     },
     setLine(value) {
       line = String(value ?? "");

@@ -3975,7 +3975,7 @@ async function interactive(config, auth, configPath, existingState) {
       // position before repainting; that leaves the caret spanning/occupying
       // the wrong row after a resize or focus return.
       rl.resetRenderAnchor?.();
-      rl.setPrompt("\u001b[38;2;204;120;92m┃\u001b[38;2;250;249;245m  \u001b[0m");
+      rl.setPrompt("\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m");
       rl.prompt();
       composerMounted = true;
       return;
@@ -3985,7 +3985,7 @@ async function interactive(config, auth, configPath, existingState) {
     // color rather than trusting `stdout.columns` (which can be wrong in
     // Windows Terminal). This is the clean, full-width command rectangle.
     output.write("\r\u001b[2K\u001b[0m\r");
-    rl.setPrompt("\u001b[38;2;204;120;92m┃\u001b[38;2;250;249;245m  \u001b[0m");
+    rl.setPrompt("\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m");
     rl.prompt();
   }
 
