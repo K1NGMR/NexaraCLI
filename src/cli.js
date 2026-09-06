@@ -1683,13 +1683,11 @@ function printModelChangeMessage(modelName, effort = "") {
 function userTurnRows(text, files = []) {
   const width = Math.max(20, terminalWidth());
   const wrappedLines = wrapChatText(text, Math.max(16, width - 6));
-  return 6 + wrappedLines.length + (files.length ? 1 : 0);
+  return 1 + wrappedLines.length + (files.length ? 1 : 0);
 }
 
 function printUserTurn(text, files = [], timestamp = null) {
   const width = Math.max(20, terminalWidth());
-  console.log();
-  console.log(color.blue("─".repeat(width)));
   console.log();
   const lines = wrapChatText(text, Math.max(16, width - 6));
   lines.forEach((line, index) => {
@@ -1700,9 +1698,6 @@ function printUserTurn(text, files = [], timestamp = null) {
   if (files.length) {
     console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
   }
-  console.log();
-  console.log(color.blue("─".repeat(width)));
-  console.log();
 }
 
 function printAssistantHeader(state, mode) {
@@ -4015,42 +4010,22 @@ async function interactive(config, auth, configPath, existingState) {
   function fixedComposerFooterLine() {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
-    const left = shorten(`  ${color.muted(displayPath())}`, Math.max(8, width - 2));
-    const end = color.muted(`Nexara CLI ${CURRENT_VERSION}`);
-    const availableEnd = Math.max(0, width - visibleLength(left) - 2);
-    const fittedEnd = availableEnd ? shorten(end, availableEnd) : "";
-    const gap = Math.max(2, width - visibleLength(left) - visibleLength(fittedEnd));
-    return `${left}${" ".repeat(gap)}${fittedEnd}`;
+    return color.blue("─".repeat(width));
   }
 
   function fixedComposerMetadataLine() {
     const columns = Math.max(20, Number(output.columns) || 80);
     const width = Math.max(20, columns - 1);
-    const metadata = shorten(fixedComposerMetadata(), width);
-    return `${metadata}${" ".repeat(Math.max(0, width - visibleLength(metadata)))}`;
+    return color.blue("─".repeat(width));
   }
 
   function refreshFixedStatus() {
     if (!composerMounted || railTop == null) return;
-    const columns = Math.max(20, Number(output.columns) || 80);
-    const width = Math.max(20, columns - 1);
-    const status = shorten(fixedComposerFooterLine(), width);
-    const statusRow = railRows ?? terminalRows();
-    // The metadata row only used to get repainted on mount/resize, not on
-    // this 360ms spinner tick. Redraw it here too, save/restore-wrapped
-    // exactly like the footer row below, so it stays live without touching
-    // the editor's own cursor.
     const inputStartRow = railTop ?? transcriptBottom() + 1;
     const metadataRow = inputStartRow + COMPOSER_INPUT_ROWS;
-    output.write(`\u001b7\u001b[${metadataRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerMetadataLine()}\u001b[0m\u001b8`);
-    output.write(`\u001b7\u001b[${statusRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${status}\u001b[0m\u001b8`);
-    // The input rows themselves are muted while busy (terminal-editor.js's
-    // render() no-ops in that mode to avoid racing the transcript's own
-    // absolute-cursor writes), so without this they just stayed visually
-    // frozen -- showing nothing -- for as long as the turn ran. Paint the
-    // live draft here instead, using the same safe absolute-row addressing
-    // as the two lines above, which cannot race the muted editor's own
-    // relative-cursor math because it never touches it.
+    const statusRow = railRows ?? terminalRows();
+    output.write(`\u001b7\u001b[${metadataRow};1H\u001b[2K${fixedComposerMetadataLine()}\u001b8`);
+    output.write(`\u001b7\u001b[${statusRow};1H\u001b[2K${fixedComposerFooterLine()}\u001b8`);
     if (state.busy) {
       const preview = draftPreviewRows();
       for (let index = 0; index < COMPOSER_INPUT_ROWS; index += 1) {
@@ -4064,22 +4039,18 @@ async function interactive(config, auth, configPath, existingState) {
   function drawFixedComposerRail({ includeInput = false } = {}) {
     const rows = terminalRows();
     const top = transcriptBottom() + 1;
-    // Record where this draw actually landed so a later clear (which may
-    // run after a resize changes terminalRows()) still erases these rows.
     railRows = rows;
     railTop = top;
     const inputStartRow = top;
     const metadataRow = top + COMPOSER_INPUT_ROWS;
     const bottomRuleRow = rows;
-    // Keep one column of safety on the right edge for Windows Terminal.
-    const width = Math.max(20, Number(output.columns) || 80);
-    output.write(`\u001b[${metadataRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerMetadataLine()}\u001b[0m`);
+    output.write(`\u001b[${top};1H\u001b[2K${fixedComposerMetadataLine()}`);
     if (includeInput) {
-      for (let row = inputStartRow; row < metadataRow; row += 1) {
+      for (let row = inputStartRow + 1; row < metadataRow; row += 1) {
         output.write(`\u001b[${row};1H\u001b[2K\u001b[0m`);
       }
     }
-    output.write(`\u001b[${bottomRuleRow};1H\u001b[48;2;24;23;21m\u001b[38;2;250;249;245m\u001b[2K${fixedComposerFooterLine()}\u001b[0m`);
+    output.write(`\u001b[${bottomRuleRow};1H\u001b[2K${fixedComposerFooterLine()}`);
   }
 
   function showComposer() {
