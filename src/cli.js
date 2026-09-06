@@ -3772,6 +3772,9 @@ async function interactive(config, auth, configPath, existingState) {
       clearTimeout(mountComposerTimer);
       mountComposerTimer = null;
     }
+    if (fixedComposer && composerMounted) {
+      return;
+    }
     clearComposerFooter();
   };
   state.mountComposer = () => showComposer();
