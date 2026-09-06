@@ -4118,7 +4118,8 @@ async function interactive(config, auth, configPath, existingState) {
     if (closing || rl.closed) return;
     clearComposerFooter();
     if (fixedComposer) {
-      const inputRow = transcriptBottom() + 2;
+      const top = transcriptBottom() + 1;
+      const inputRow = top + 1;
       output.write("\u001b[s");
       transcriptCursorSaved = true;
       output.write(`\u001b[1;${transcriptBottom()}r`);
