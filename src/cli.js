@@ -2732,17 +2732,14 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
   // transcript chrome suppressed by oneShot, but always render the final
   // assistant text so piping `nexara --print ...` is useful.
   const quiet = Boolean((state.quiet && !state.printText) || state.outputFormat === "json" || machine);
-  if (!quiet && !alreadyRendered && !state.printText) {
-    // Commit the user message before any network/thread setup. This keeps the
-    // submitted prompt visible even when auth, thread creation, or the model
-    // takes a moment, and prevents the composer redraw from hiding it.
-    state.clearComposer?.();
-    const userRows = userTurnRows(trimmed, files);
-    state.prepareTranscript?.(userRows);
-    printUserTurn(trimmed, files);
+  if (!quiet && !state.printText) {
+    if (!alreadyRendered) {
+      state.clearComposer?.();
+      const userRows = userTurnRows(trimmed, files);
+      state.prepareTranscript?.(userRows);
+      printUserTurn(trimmed, files);
+    }
     printAssistantHeader(state, mode);
-    // Keep the control rail visible while the model works. The prompt remains
-    // usable, so a second line can be queued without disturbing the stream.
     state.mountComposer?.();
   }
   // Muted (not blocked) for the rest of this turn's work: the transcript is
