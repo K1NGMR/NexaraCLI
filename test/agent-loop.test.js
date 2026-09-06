@@ -41,8 +41,18 @@ test("unknown pricing is not silently treated as zero", () => {
 });
 
 function freshApiState() {
-  return { text: "", reasoning: "", nativeCalls: [], lastUsage: null, sources: [], model: null, finished: false };
+  return { text: "", reasoning: "", nativeCalls: [], lastUsage: null, sources: [], model: null, finished: false, toolBudgetExhausted: false };
 }
+
+test("finish metadata exposes a server tool-budget boundary to the CLI loop", () => {
+  const state = freshApiState();
+  consumeDataLine(
+    JSON.stringify({ type: "finish", messageMetadata: { toolBudgetExhausted: true } }),
+    state, null, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
+  );
+  assert.equal(state.finished, true);
+  assert.equal(state.toolBudgetExhausted, true);
+});
 
 test("parallel tool-call events in one step are all captured, not just the first", () => {
   const state = freshApiState();

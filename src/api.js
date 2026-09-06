@@ -255,6 +255,13 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
   } else if (type === "finish") {
     state.finished = true;
     if (metadata.model) state.model = metadata.model;
+    // The server may deliberately end a request with a text-only progress
+    // summary when its per-request tool/time budget is exhausted. That is a
+    // transport boundary, not the end of the user's task; surface the bit so
+    // the local agent loop can immediately continue in a fresh request.
+    if (metadata.toolBudgetExhausted === true || event.toolBudgetExhausted === true) {
+      state.toolBudgetExhausted = true;
+    }
     onFinish?.(event);
     if (metadata.usage || event.usage) {
       const usage = metadata.usage || event.usage;
@@ -362,7 +369,7 @@ export async function sendChat({
     }
   }
 
-  const state = { text: "", reasoning: "", nativeCalls: [], lastUsage: null, sources: [], model: null, finished: false };
+  const state = { text: "", reasoning: "", nativeCalls: [], lastUsage: null, sources: [], model: null, finished: false, toolBudgetExhausted: false };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const writeText = onText ?? ((text) => process.stdout.write(text));
@@ -418,6 +425,7 @@ export async function sendChat({
     nativeCalls: state.nativeCalls,
     sources: state.sources,
     model: state.model,
+    toolBudgetExhausted: state.toolBudgetExhausted,
   };
 }
 

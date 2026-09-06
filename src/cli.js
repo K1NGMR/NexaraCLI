@@ -2897,6 +2897,20 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       composerNotice(state, "The model returned no response after 3 attempts. Please try again or switch models with /model.", "red");
     }
     if (!runnableCalls.length) {
+      // The server protects each HTTP request with a tool/time budget. When
+      // that boundary is reached it removes tools for one step and asks the
+      // model for a progress summary, tagging the finish metadata. Treating
+      // that perfectly normal text response as task completion is what made
+      // long CLI jobs stop midway. Save it as context and immediately give
+      // the model a fresh request budget so it can resume autonomously.
+      if (assistant.toolBudgetExhausted) {
+        conversation.push(assistant);
+        await persistLocalSession(state, conversation);
+        if (!quiet) composerNotice(state, "Continuing the task with a fresh tool budget…", "amber");
+        if (state.cancelCurrent === cancel) state.cancelCurrent = previousCancel || null;
+        emptyContinuationRetries = 0;
+        continue;
+      }
       // Printed only here, where the agent loop actually ends, rather than
       // after every intermediate turn -- a turn that reads a file and keeps
       // going still has more tool calls queued, so marking it "Completed"
