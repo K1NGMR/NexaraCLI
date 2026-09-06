@@ -1143,23 +1143,25 @@ function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}
 function printToolResult(name, result, { args = {}, cwd = "", error = false, streamJson = false, state = null } = {}) {
   const text = String(result || "").trim();
   if (streamJson) return;
+  // Non-error tool results are already represented by the tool-call line above;
+  // printing them again duplicates lines on screen (e.g., ● Read / ● Read).
+  if (!error) return;
+
   if (state) {
     setComposerActivity(state, null);
-    state.prepareTranscript?.(error && text ? 2 : 1);
+    state.prepareTranscript?.(text ? 2 : 1);
   }
 
-  const circle = error ? color.red("●") : color.blue("●");
+  const circle = color.red("●");
   const toolNameYellow = color.yellow(formatToolName(name));
   const paramStr = formatToolParamSummary(name, args, cwd);
   const paramFormatted = paramStr ? `(${paramStr})` : "";
   const expandHint = color.dim(" (ctrl+o to expand)");
 
-  if (error) {
-    console.log(`  ${circle} ${toolNameYellow}${paramFormatted}${expandHint}`);
-    if (text) {
-      const firstLine = text.split(/\r?\n/)[0] || text;
-      console.log(`  ${color.blue("  ⎿  ")}${color.red(firstLine)}`);
-    }
+  console.log(`  ${circle} ${toolNameYellow}${paramFormatted}${expandHint}`);
+  if (text) {
+    const firstLine = text.split(/\r?\n/)[0] || text;
+    console.log(`  ${color.blue("  ⎿  ")}${color.red(firstLine)}`);
   }
 
   if (state) {
