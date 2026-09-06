@@ -298,6 +298,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     if (name === "right") { cursor = Math.min(line.length, cursor + 1); render(); return; }
     if (name === "home" || (key.ctrl && name === "a")) { cursor = 0; render(); return; }
     if (name === "end" || (key.ctrl && name === "e")) { cursor = line.length; render(); return; }
+    if (name === "up" || name === "down") return;
     if (key.ctrl && name === "u") { line = ""; cursor = 0; render(); return; }
     if (key.ctrl || key.meta || key.alt || !str || str.charCodeAt(0) < 32 || str.charCodeAt(0) === 127) return;
     line = `${line.slice(0, cursor)}${str}${line.slice(cursor)}`;
