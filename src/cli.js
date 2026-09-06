@@ -4266,7 +4266,7 @@ async function interactive(config, auth, configPath, existingState) {
     }
     const files = line.startsWith("/") ? [] : state.pendingImages.slice();
     if (!line.startsWith("/")) state.pendingImages = [];
-    if (activeRun) {
+    if (activeRun || state.busy) {
       pendingMessages.push({ line, files });
       state.prepareTranscript?.(userTurnRows(line, files) + 1);
       printUserTurn(line, files);
