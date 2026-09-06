@@ -1114,9 +1114,20 @@ function formatToolParamSummary(name, args = {}, cwd = "") {
   return fallback ? formatPathWithTilde(fallback, cwd) : "";
 }
 
+function printModelChangeMessage(modelName, effort = "", state = null) {
+  if (state) state.clearComposer?.();
+  const effortLabel = effort ? ` (${REASONING_EFFORT_LABELS[effort] || effort})` : "";
+  console.log(`  ${color.blue("> /model")}`);
+  console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(`Model set to ${modelName}${effortLabel}`)}`);
+  if (state) (state.scheduleMountComposer || state.mountComposer)?.();
+}
+
 function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}) {
   if (streamJson || !call) return;
-  if (state) setComposerActivity(state, null);
+  if (state) {
+    setComposerActivity(state, null);
+    state.clearComposer?.();
+  }
 
   const name = call.name || "tool";
   const args = call.arguments || {};
@@ -1126,22 +1137,16 @@ function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}
 
   console.log(`  ${color.blue("●")} ${toolNameYellow}${paramFormatted}`);
 
-  if (args.command && typeof args.command === "string") {
-    const cmdLines = args.command.trim().split(/\r?\n/);
-    for (const line of cmdLines) {
-      console.log(`  ${color.blue("  ⎿  ")}${color.cream(line)}`);
-    }
-  } else if ((name === "WriteFile" || name === "EditFile" || name === "Write" || name === "Edit") && (args.explanation || args.description)) {
-    console.log(`  ${color.blue("  ⎿  ")}${color.muted(args.explanation || args.description)}`);
-  } else if (args.instruction && typeof args.instruction === "string") {
-    console.log(`  ${color.blue("  ⎿  ")}${color.muted(args.instruction)}`);
-  }
+  if (state) (state.scheduleMountComposer || state.mountComposer)?.();
 }
 
 function printToolResult(name, result, { args = {}, cwd = "", error = false, streamJson = false, state = null } = {}) {
   const text = String(result || "").trim();
   if (streamJson) return;
-  if (state) setComposerActivity(state, null);
+  if (state) {
+    setComposerActivity(state, null);
+    state.clearComposer?.();
+  }
 
   const circle = error ? color.red("●") : color.blue("●");
   const toolNameYellow = color.yellow(formatToolName(name));
@@ -1150,36 +1155,17 @@ function printToolResult(name, result, { args = {}, cwd = "", error = false, str
   const expandHint = color.dim(" (ctrl+o to expand)");
 
   if (error) {
-    console.log(`  ${circle} ${toolNameYellow}${paramFormatted} ${color.red("failed")}`);
+    console.log(`  ${circle} ${toolNameYellow}${paramFormatted}${expandHint}`);
     if (text) {
-      const lines = text.split(/\r?\n/);
-      const maxErrLines = 10;
-      for (const line of lines.slice(0, maxErrLines)) {
-        console.log(`  ${color.blue("  ⎿  ")}${color.red(line)}`);
-      }
-      if (lines.length > maxErrLines) {
-        console.log(`  ${color.blue("  ⎿  ")}${color.dim(`… ${lines.length - maxErrLines} more lines of error`)}`);
-      }
-    }
-  } else {
-    if (text) {
-      const lines = text.split(/\r?\n/);
-      const maxPreviewLines = 12;
-      const preview = lines.slice(0, maxPreviewLines);
-      for (const line of preview) {
-        console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(line)}`);
-      }
-      if (lines.length > maxPreviewLines) {
-        console.log(`  ${color.blue("  ⎿  ")}${color.dim(`… ${lines.length - maxPreviewLines} more lines${expandHint}`)}`);
-      }
-    } else {
-      console.log(`  ${color.blue("  ⎿  ")}${color.dim("Done")}`);
+      const firstLine = text.split(/\r?\n/)[0] || text;
+      console.log(`  ${color.blue("  ⎿  ")}${color.red(firstLine)}`);
     }
   }
 
   if (state) {
     state.lastToolResults ??= [];
     state.lastToolResults.push({ name, paramStr, result: text, error, expanded: false });
+    (state.scheduleMountComposer || state.mountComposer)?.();
   }
 }
 
@@ -1674,11 +1660,7 @@ function userTurnLine(text) {
 // one constant so userTurnRows() (which prepareTranscript() uses to reserve
 // exactly the right number of rows) can never drift out of sync with what
 // printUserTurn() actually writes.
-function printModelChangeMessage(modelName, effort = "") {
-  const effortLabel = effort ? ` (${REASONING_EFFORT_LABELS[effort] || effort})` : "";
-  console.log(`  ${color.blue("> /model")}`);
-  console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(`Model set to ${modelName}${effortLabel}`)}`);
-}
+
 
 function userTurnRows(text, files = []) {
   const width = Math.max(20, terminalWidth());
@@ -2941,9 +2923,11 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       const reasoning = stripInlineMarkdownEmphasis(String(state.thinkingText || "").trim());
       if (reasoning && !thinkingRendered) {
         const reasoningLines = reasoning.split(/\r?\n/);
-        state.prepareTranscript?.(reasoningLines.length + renderedResponse.split(/\r?\n/).length + 3);
-        console.log(`  ${color.cream("▾ Thinking")}`);
-        process.stdout.write(`${reasoningLines.map((line) => `    ${color.italicMuted(line)}`).join("\n")}\n\n`);
+        const tokEst = formatTokens(estimateTokens(reasoning));
+        state.prepareTranscript?.(renderedResponse.split(/\r?\n/).length + 3);
+        console.log(`  ${color.coral("▸")} ${color.cream("Thought for 2s")}${color.dim(`, ${tokEst} tokens`)}`);
+        if (reasoningLines[0]) console.log(`    ${color.dim(stripInlineMarkdownEmphasis(reasoningLines[0]))}`);
+        console.log();
       } else {
         state.prepareTranscript?.(renderedResponse.split(/\r?\n/).length);
       }
@@ -3179,17 +3163,17 @@ async function handleSlash(state, line) {
         if (!choice?.model) return true;
         if (choice.sessionOnly) {
           state.config = { ...state.config, selectedModel: choice.model };
-          printModelChangeMessage(modelLabel(choice.model), state.config.selectedReasoningEffort);
+          printModelChangeMessage(modelLabel(choice.model), state.config.selectedReasoningEffort, state);
         } else {
           state.config = { ...state.config, ...saveConfig({ selectedModel: choice.model }) };
-          printModelChangeMessage(modelLabel(choice.model), state.config.selectedReasoningEffort);
+          printModelChangeMessage(modelLabel(choice.model), state.config.selectedReasoningEffort, state);
         }
         return true;
       }
       const model = resolveModel(argument);
       if (!model) { console.log(color.red(`No exact model match for “${argument}”.`)); printModels(state.config.selectedModel, argument); return true; }
       state.config = { ...state.config, ...saveConfig({ selectedModel: model }) };
-      printModelChangeMessage(modelLabel(model), state.config.selectedReasoningEffort);
+      printModelChangeMessage(modelLabel(model), state.config.selectedReasoningEffort, state);
       return true;
     }
     case "/effort": {
