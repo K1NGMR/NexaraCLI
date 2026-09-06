@@ -1542,12 +1542,18 @@ function printNewConversationIntro() {
     return `${" ".repeat(padding)}${value}`;
   };
   console.log();
-  // Keep the OpenCode home composition, but use a legible Nexara label
-  // instead of the decorative block-glyph wordmark.
-  console.log(center(color.cream("Nexara")));
-  console.log(center(color.muted("the open source coding agent")));
+  const asciiLogo = [
+    "███╗   ██╗███████╗██╗  ██╗██████╗ ██████╗  █████╗ ",
+    "████╗  ██║██╔════╝╚██╗██╔╝██╔══██╗██╔══██╗██╔══██╗",
+    "██╔██╗ ██║█████╗   ╚███╔╝ ██████╔╝██████╔╝███████║",
+    "██║╚██╗██║██╔══╝   ██╔██╗ ██╔══██╗██╔══██╗██╔══██║",
+    "██║ ╚████║███████╗██╔╝ ██╗██║  ██║██║  ██║██║  ██║",
+    "╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
+  ];
+  asciiLogo.forEach((line) => console.log(center(color.coral(line))));
   console.log();
-  console.log(center(color.dim('Ask anything… "Fix a TODO in the codebase"')));
+  console.log(center(`${color.cream("Nexara AI Coding Assistant")} ${color.dim("· v0.1.87")}`));
+  console.log(center(color.muted("Type a prompt or press Tab for commands (/model, /plan, /think, /doctor)")));
   console.log();
 }
 
