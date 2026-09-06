@@ -86,6 +86,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     removeListener: (...args) => { events.removeListener(...args); return editor; },
     emit: (...args) => events.emit(...args),
     prompt() { render(); },
+    renderAt(row) { render(Number(row)); },
     // The fixed composer can be removed and then painted again at an absolute
     // row (for example after a terminal resize). The next render starts at
     // that new anchor, so it must not replay the previous render's relative
@@ -140,7 +141,12 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   }
 
   function render() {
-    if (closed || inputMode === "muted") return;
+    if (closed) return;
+    const absoluteRow = arguments.length ? Number(arguments[0]) : null;
+    if (inputMode === "muted" && !Number.isInteger(absoluteRow)) {
+      events.emit("change", line);
+      return;
+    }
     const columns = Math.max(24, Number(width()) || 80);
     const available = Math.max(1, columns - currentPrompt.length - 3);
     const maxRows = Math.max(1, Number(rows()) || 3);
@@ -168,6 +174,19 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     const visibleChunks = chunks.slice(firstRow, firstRow + maxRows);
     const visibleCursorRow = Math.max(0, cursorRow - firstRow);
     const visibleRows = Math.max(1, visibleChunks.length);
+    if (Number.isInteger(absoluteRow) && absoluteRow > 0) {
+      const rowsToClear = Math.max(renderedRows, visibleRows);
+      for (let index = 0; index < rowsToClear; index += 1) {
+        const row = absoluteRow + index;
+        const content = index < visibleRows ? `${currentPrompt}${visibleChunks[index]}` : "";
+        output.write(`\u001b7\u001b[${row};1H\u001b[2K${content}\u001b8`);
+      }
+      output.write(`\u001b[${absoluteRow + visibleCursorRow};1H`);
+      const cursorOffset = currentPrompt.length + cursorCol;
+      if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
+      renderedRows = visibleRows;
+      return;
+    }
     // Return to the top of the previous render, clear only the editor rows,
     // then paint every wrapped row in one pass. No delete/reinsert blink.
     if (renderedRows > 1) output.write(`\r\u001b[${renderedRows - 1}A`);

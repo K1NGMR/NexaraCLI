@@ -3430,6 +3430,15 @@ async function interactive(config, auth, configPath, existingState) {
   // the key invariant that prevents autocomplete, resize and streamed output
   // from ever cutting through the input surface in Windows Terminal.
   const fixedComposer = Boolean(input.isTTY && output.isTTY);
+  // While a response is streaming, the editor's relative redraw is muted to
+  // protect the transcript's absolute cursor writes. Repaint the draft at
+  // its fixed absolute rows immediately on every change so type-ahead never
+  // waits for the next status tick to become visible.
+  if (fixedComposer && typeof rl.on === "function") {
+    rl.on("change", () => {
+      if (state.busy && composerMounted && railTop != null) rl.renderAt?.(railTop);
+    });
+  }
   // Match terminalWidth()'s margin below: writing to a terminal's literal
   // last row is exactly as unreliable on Windows as writing to its literal
   // last column. Without this, output.rows can be reported 1-2 rows taller

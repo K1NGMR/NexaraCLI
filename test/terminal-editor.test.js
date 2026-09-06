@@ -98,6 +98,21 @@ test("resetRenderAnchor prevents a stale wrapped-row offset on remount", () => {
   assert.equal(editor.line, "a very long draft that wraps");
 });
 
+test("renderAt repaints muted type-ahead without relative cursor movement", () => {
+  const { input, output } = fakeStreams();
+  const writes = [];
+  output.write = (value) => { writes.push(String(value)); return true; };
+  const editor = createTerminalEditor({ input, output, width: () => 40, rows: () => 3 });
+  editor.pause("muted");
+  press(input, "h");
+  press(input, "i");
+  assert.equal(editor.line, "hi");
+  writes.length = 0;
+  editor.renderAt(10);
+  assert.equal(writes.some((value) => value.includes("\u001b[10;1H")), true);
+  assert.equal(writes.some((value) => value.includes("\u001b[1A")), false);
+});
+
 test("submitting a normal line emits 'line' and clears the buffer", () => {
   const { input, output } = fakeStreams();
   const editor = createTerminalEditor({ input, output });
