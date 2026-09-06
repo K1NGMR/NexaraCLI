@@ -1242,20 +1242,23 @@ function todoProgressBar(todos, width = 18) {
   return `${color.teal("━".repeat(filled))}${color.dim("─".repeat(Math.max(0, width - filled)))}`;
 }
 
-function printTodoList(todos, { compact = false } = {}) {
+function printTodoList(todos, { compact = false, state = null } = {}) {
   if (!Array.isArray(todos) || !todos.length) return;
   const width = Math.max(36, terminalWidth() - 4);
-  const inner = Math.max(24, width - 4);
+  const innerWidth = width - 4; // width inside border vertical bars
+
+  // Build every line of the box as a clean string first
+  const boxLines = [];
   const heading = compact ? "TASK BOARD" : "TASK BOARD UPDATED";
-  const rule = (left, right = "") => {
-    const label = ` ${left} `;
-    const suffix = right ? ` ${right} ` : "";
-    const fill = Math.max(1, inner - visibleLength(label) - visibleLength(suffix));
-    return `  ${color.dim("╭─")} ${color.cream(label)}${color.dim("─".repeat(fill))}${suffix ? color.dim(suffix) : ""}${color.dim("╮")}`;
-  };
-  console.log(`\n${rule(heading)}`);
-  console.log(`  ${color.dim("│")} ${color.muted(todoSummary(todos))}  ${todoProgressBar(todos)} ${color.dim("│")}`);
-  console.log(`  ${color.dim("├─")} ${color.dim("WORKSTREAMS")} ${color.dim("─".repeat(Math.max(1, inner - 14)))}${color.dim("┤")}`);
+  const topBar = `  ${color.dim("╭─")} ${color.cream(heading)} ${color.dim("─".repeat(Math.max(1, innerWidth - heading.length - 2)))}${color.dim("╮")}`;
+  boxLines.push(topBar);
+
+  const summaryStr = `${todoSummary(todos)}  ${todoProgressBar(todos)}`;
+  const summaryPad = Math.max(0, innerWidth - visibleLength(summaryStr));
+  boxLines.push(`  ${color.dim("│")} ${color.muted(todoSummary(todos))}  ${todoProgressBar(todos)}${" ".repeat(summaryPad)}${color.dim("│")}`);
+
+  const midBar = `  ${color.dim("├─")} ${color.dim("WORKSTREAMS")} ${color.dim("─".repeat(Math.max(1, innerWidth - 13)))}${color.dim("┤")}`;
+  boxLines.push(midBar);
 
   const groups = ["in_progress", "pending", "completed", "cancelled"];
   for (const status of groups) {
@@ -1264,19 +1267,38 @@ function printTodoList(todos, { compact = false } = {}) {
     const statusColor = status === "completed" ? color.teal
       : status === "in_progress" ? color.coral
         : status === "cancelled" ? color.red : color.amber;
-    console.log(`  ${color.dim("│")} ${statusColor(todoStatusLabel(status))} ${color.dim(`· ${entries.length}`)}`);
+    
+    const headerStr = `${todoStatusLabel(status)} · ${entries.length}`;
+    const headerPad = Math.max(0, innerWidth - (todoStatusLabel(status).length + 3 + String(entries.length).length));
+    boxLines.push(`  ${color.dim("│")} ${statusColor(todoStatusLabel(status))} ${color.dim(`· ${entries.length}`)}${" ".repeat(headerPad)}${color.dim("│")}`);
+
     for (const { todo, index } of entries) {
-      const rows = wrapChatText(todo.content, Math.max(20, inner - 11));
+      const rows = wrapChatText(todo.content, Math.max(20, innerWidth - 11));
       const marker = todoStatusGlyph(todo.status);
       rows.forEach((row, rowIndex) => {
-        const prefix = rowIndex === 0
+        const prefixVisibleLen = rowIndex === 0 ? 8 : 10;
+        const prefixStr = rowIndex === 0
           ? `${marker} ${color.muted(String(index + 1).padStart(2, "0"))} ${color.dim("│")} `
           : "          ";
-        console.log(`  ${color.dim("│")} ${prefix}${color.cream(row)}`);
+        const contentLen = visibleLength(row);
+        const rowPad = Math.max(0, innerWidth - prefixVisibleLen - contentLen);
+        boxLines.push(`  ${color.dim("│")} ${prefixStr}${color.cream(row)}${" ".repeat(rowPad)}${color.dim("│")}`);
       });
     }
   }
-  console.log(`  ${color.dim("╰─")} ${color.dim("Updated by Nexara")} ${color.dim("─".repeat(Math.max(1, inner - 21)))}${color.dim("╯")}`);
+
+  const footerBar = `  ${color.dim("╰─")} ${color.dim("Updated by Nexara")} ${color.dim("─".repeat(Math.max(1, innerWidth - 20)))}${color.dim("╯")}`;
+  boxLines.push(footerBar);
+
+  if (state) {
+    state.prepareTranscript?.(boxLines.length);
+  }
+  for (const line of boxLines) {
+    console.log(line);
+  }
+  if (state) {
+    (state.scheduleMountComposer || state.mountComposer)?.();
+  }
 }
 
 function outputToolEvent(state, event) {
@@ -1429,7 +1451,7 @@ async function runClientTool(state, call, signal) {
     const result = await executeCliTool(name, args, { cwd: state.cwd, allowOutside: outsidePaths.length > 0, signal });
     if (name === "TodoWrite") {
       state.todos = applyCliTodoUpdate(state.todos, args.todos, args.mode);
-      if (state.outputFormat !== "stream-json") printTodoList(state.todos);
+      if (state.outputFormat !== "stream-json") printTodoList(state.todos, { state });
       outputToolEvent(state, { type: "todo-update", todos: state.todos });
     }
     printToolResult(name, result, { args, cwd: state.cwd, streamJson: state.outputFormat === "stream-json", state });
