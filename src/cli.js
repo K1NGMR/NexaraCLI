@@ -4268,9 +4268,12 @@ async function interactive(config, auth, configPath, existingState) {
     if (!line.startsWith("/")) state.pendingImages = [];
     if (activeRun || state.busy) {
       pendingMessages.push({ line, files });
-      state.prepareTranscript?.(userTurnRows(line, files) + 1);
-      printUserTurn(line, files);
-      console.log(`  ${color.amber("↳")} ${color.cream("Queued")} ${color.muted(`message ${pendingMessages.length} · will run after the current turn`)}`);
+      const userRows = userTurnRows(line, files);
+      state.prepareTranscript?.(userRows);
+      console.log(`  ${color.dim("▸")} ${color.cream(line)}`);
+      if (files.length) {
+        console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
+      }
       showComposer();
       return;
     }
