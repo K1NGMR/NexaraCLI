@@ -192,7 +192,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       for (let index = 0; index < rowsToClear; index += 1) {
         const row = absoluteRow + index;
         const content = index < visibleRows ? `${currentPrompt}${visibleChunks[index]}` : "";
-        output.write(`\u001b7\u001b[${row};1H\u001b[2K${content}\u001b8`);
+        output.write(`\u001b[${row};1H\u001b[2K${content}`);
       }
       output.write(`\u001b[${absoluteRow + visibleCursorRow};1H`);
       const cursorOffset = currentPrompt.length + cursorCol;
