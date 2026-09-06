@@ -1114,13 +1114,34 @@ function formatToolParamSummary(name, args = {}, cwd = "") {
   return fallback ? formatPathWithTilde(fallback, cwd) : "";
 }
 
-function printToolCall(call, { streamJson = false } = {}) {
-  if (streamJson) return;
+function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}) {
+  if (streamJson || !call) return;
+  if (state) setComposerActivity(state, null);
+
+  const name = call.name || "tool";
+  const args = call.arguments || {};
+  const toolNameYellow = color.yellow(formatToolName(name));
+  const paramStr = formatToolParamSummary(name, args, cwd);
+  const paramFormatted = paramStr ? `(${paramStr})` : "";
+
+  console.log(`  ${color.blue("●")} ${toolNameYellow}${paramFormatted}`);
+
+  if (args.command && typeof args.command === "string") {
+    const cmdLines = args.command.trim().split(/\r?\n/);
+    for (const line of cmdLines) {
+      console.log(`  ${color.blue("  ⎿  ")}${color.cream(line)}`);
+    }
+  } else if ((name === "WriteFile" || name === "EditFile" || name === "Write" || name === "Edit") && (args.explanation || args.description)) {
+    console.log(`  ${color.blue("  ⎿  ")}${color.muted(args.explanation || args.description)}`);
+  } else if (args.instruction && typeof args.instruction === "string") {
+    console.log(`  ${color.blue("  ⎿  ")}${color.muted(args.instruction)}`);
+  }
 }
 
 function printToolResult(name, result, { args = {}, cwd = "", error = false, streamJson = false, state = null } = {}) {
   const text = String(result || "").trim();
   if (streamJson) return;
+  if (state) setComposerActivity(state, null);
 
   const circle = error ? color.red("●") : color.blue("●");
   const toolNameYellow = color.yellow(formatToolName(name));
@@ -1128,11 +1149,32 @@ function printToolResult(name, result, { args = {}, cwd = "", error = false, str
   const paramFormatted = paramStr ? `(${paramStr})` : "";
   const expandHint = color.dim(" (ctrl+o to expand)");
 
-  console.log(`  ${circle} ${toolNameYellow}${paramFormatted}${expandHint}`);
-
-  if (error && text) {
-    const firstLine = text.split("\n")[0] || text;
-    console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(firstLine)}`);
+  if (error) {
+    console.log(`  ${circle} ${toolNameYellow}${paramFormatted} ${color.red("failed")}`);
+    if (text) {
+      const lines = text.split(/\r?\n/);
+      const maxErrLines = 10;
+      for (const line of lines.slice(0, maxErrLines)) {
+        console.log(`  ${color.blue("  ⎿  ")}${color.red(line)}`);
+      }
+      if (lines.length > maxErrLines) {
+        console.log(`  ${color.blue("  ⎿  ")}${color.dim(`… ${lines.length - maxErrLines} more lines of error`)}`);
+      }
+    }
+  } else {
+    if (text) {
+      const lines = text.split(/\r?\n/);
+      const maxPreviewLines = 12;
+      const preview = lines.slice(0, maxPreviewLines);
+      for (const line of preview) {
+        console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(line)}`);
+      }
+      if (lines.length > maxPreviewLines) {
+        console.log(`  ${color.blue("  ⎿  ")}${color.dim(`… ${lines.length - maxPreviewLines} more lines${expandHint}`)}`);
+      }
+    } else {
+      console.log(`  ${color.blue("  ⎿  ")}${color.dim("Done")}`);
+    }
   }
 
   if (state) {
@@ -2814,25 +2856,30 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
         },
         onToolCall: (call) => {
           activity.clear();
+          setComposerActivity(state, null);
           state.clearComposer?.();
-          printToolCall(call, { streamJson: machine });
+          printToolCall(call, { cwd: state.cwd, streamJson: machine, state });
           (state.scheduleMountComposer || state.mountComposer)?.();
           outputToolEvent(state, { type: "tool-call", name: call.name, input: call.arguments, toolCallId: call.toolCallId });
         },
         onToolResult: (result) => {
+          activity.clear();
+          setComposerActivity(state, null);
           const artifactKey = result.toolCallId || `${result.name}:${typeof result.output === "string" ? result.output : JSON.stringify(result.output)}`;
           if (seenServerArtifactKeys.has(artifactKey)) return;
           seenServerArtifactKeys.add(artifactKey);
           serverArtifacts.push(result);
           state.clearComposer?.();
           if (!quiet && result.name !== "create_pdf" && result.name !== "create_image" && result.name !== "edit_image") {
-            printToolResult(result.name, result.output);
+            printToolResult(result.name, result.output, { args: result.input || {}, cwd: state.cwd, state });
           }
           (state.scheduleMountComposer || state.mountComposer)?.();
           outputToolEvent(state, { type: "tool-result", name: result.name, output: result.output });
         },
         onSource: (source) => outputToolEvent(state, { type: "source", source }),
         onFinish: (event) => {
+          activity.clear();
+          setComposerActivity(state, null);
           const metadata = event.metadata || event.messageMetadata || {};
           outputToolEvent(state, { type: "finish", model: metadata.model || null, usage: metadata.usage || null });
         },
@@ -3021,6 +3068,9 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
     // and the model reads each result in the order it will see them anyway.
     for (const call of runnableCalls) {
       state.clearComposer?.();
+      activity.clear();
+      setComposerActivity(state, null);
+      printToolCall(call, { cwd: state.cwd, streamJson: machine, state });
       const resultText = await runClientTool(state, call, controller.signal);
       (state.scheduleMountComposer || state.mountComposer)?.();
       outputToolEvent(state, { type: "tool-result", name: call.name, output: resultText, toolCallId: call.toolCallId });
