@@ -1137,20 +1137,56 @@ function todoSummary(todos) {
   return `${completed}/${total} complete${active ? ` · ${active} in progress` : ""}`;
 }
 
+function todoStatusLabel(status) {
+  return ({
+    in_progress: "IN PROGRESS",
+    pending: "NEXT UP",
+    completed: "COMPLETED",
+    cancelled: "CANCELLED",
+  })[status] || "NEXT UP";
+}
+
+function todoProgressBar(todos, width = 18) {
+  const completed = todos.filter((todo) => todo.status === "completed").length;
+  const filled = todos.length ? Math.round((completed / todos.length) * width) : 0;
+  return `${color.teal("━".repeat(filled))}${color.dim("─".repeat(Math.max(0, width - filled)))}`;
+}
+
 function printTodoList(todos, { compact = false } = {}) {
   if (!Array.isArray(todos) || !todos.length) return;
-  const contentWidth = Math.max(24, terminalWidth() - 8);
-  const heading = compact ? "Plan" : "Plan updated";
-  console.log(`\n  ${color.coral("✦")} ${color.cream(heading)} ${color.muted(`· ${todoSummary(todos)}`)}`);
-  todos.forEach((todo, index) => {
-    const rows = wrapChatText(todo.content, contentWidth);
-    const marker = todoStatusGlyph(todo.status);
-    rows.forEach((row, rowIndex) => {
-      const prefix = rowIndex === 0 ? `${marker} ${color.muted(`${index + 1}.`)} ` : "      ";
-      console.log(`    ${prefix}${color.cream(row)}`);
-    });
-  });
-  console.log(`  ${color.dim("  Updated by Nexara")}`);
+  const width = Math.max(36, terminalWidth() - 4);
+  const inner = Math.max(24, width - 4);
+  const heading = compact ? "TASK BOARD" : "TASK BOARD UPDATED";
+  const rule = (left, right = "") => {
+    const label = ` ${left} `;
+    const suffix = right ? ` ${right} ` : "";
+    const fill = Math.max(1, inner - visibleLength(label) - visibleLength(suffix));
+    return `  ${color.dim("╭─")} ${color.cream(label)}${color.dim("─".repeat(fill))}${suffix ? color.dim(suffix) : ""}${color.dim("╮")}`;
+  };
+  console.log(`\n${rule(heading)}`);
+  console.log(`  ${color.dim("│")} ${color.muted(todoSummary(todos))}  ${todoProgressBar(todos)} ${color.dim("│")}`);
+  console.log(`  ${color.dim("├─")} ${color.dim("WORKSTREAMS")} ${color.dim("─".repeat(Math.max(1, inner - 14)))}${color.dim("┤")}`);
+
+  const groups = ["in_progress", "pending", "completed", "cancelled"];
+  for (const status of groups) {
+    const entries = todos.map((todo, index) => ({ todo, index })).filter(({ todo }) => todo.status === status);
+    if (!entries.length) continue;
+    const statusColor = status === "completed" ? color.teal
+      : status === "in_progress" ? color.coral
+        : status === "cancelled" ? color.red : color.amber;
+    console.log(`  ${color.dim("│")} ${statusColor(todoStatusLabel(status))} ${color.dim(`· ${entries.length}`)}`);
+    for (const { todo, index } of entries) {
+      const rows = wrapChatText(todo.content, Math.max(20, inner - 11));
+      const marker = todoStatusGlyph(todo.status);
+      rows.forEach((row, rowIndex) => {
+        const prefix = rowIndex === 0
+          ? `${marker} ${color.muted(String(index + 1).padStart(2, "0"))} ${color.dim("│")} `
+          : "          ";
+        console.log(`  ${color.dim("│")} ${prefix}${color.cream(row)}`);
+      });
+    }
+  }
+  console.log(`  ${color.dim("╰─")} ${color.dim("Updated by Nexara")} ${color.dim("─".repeat(Math.max(1, inner - 21)))}${color.dim("╯")}`);
 }
 
 function outputToolEvent(state, event) {
