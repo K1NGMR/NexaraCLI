@@ -2109,7 +2109,7 @@ async function selectPermissionInteractive(currentMode, cwd = process.cwd()) {
       settled = true;
       input.removeListener("keypress", onKeypress);
       input.setRawMode(Boolean(previousRawMode));
-      output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[2K\u001b[${lines.length - 1}A\u001b[?25h`);
       suppressRealContentRowCount = false;
       if (error) reject(error);
       else resolve(value);
@@ -2229,7 +2229,7 @@ async function selectModelInteractive(selected) {
       settled = true;
       input.removeListener("keypress", onKeypress);
       input.setRawMode(Boolean(previousRawMode));
-      output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[?25h\r\n`);
+      output.write(`\u001b[${lines.length - 1}A${lines.map(() => "\u001b[2K\r").join("\n")}\u001b[2K\u001b[${lines.length - 1}A\u001b[?25h`);
       suppressRealContentRowCount = false;
       if (error) reject(error);
       else resolve(value);
