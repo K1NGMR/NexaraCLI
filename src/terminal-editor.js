@@ -154,11 +154,12 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
 
   function render() {
     if (closed) return;
-    const absoluteRow = arguments.length ? Number(arguments[0]) : fixedRow;
-    if (inputMode === "muted" && !Number.isInteger(absoluteRow)) {
+    const explicitRow = arguments.length ? Number(arguments[0]) : null;
+    if (inputMode === "muted" && !Number.isInteger(explicitRow)) {
       events.emit("change", line);
       return;
     }
+    const absoluteRow = explicitRow ?? fixedRow;
     const columns = Math.max(24, Number(width()) || 80);
     const available = Math.max(1, columns - currentPrompt.length - 3);
     const maxRows = Math.max(1, Number(rows()) || 3);
