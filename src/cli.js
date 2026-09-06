@@ -4088,10 +4088,14 @@ async function interactive(config, auth, configPath, existingState) {
     if (!composerMounted || railTop == null) return;
     const width = Math.max(20, Number(output.columns) || 80);
     const top = railTop;
+    const inputRow = top + 1;
     const bottomRow = top + 2;
     const border = color.blue("─".repeat(width));
-    output.write(`\u001b7\u001b[${top};1H\u001b[2K${border}\u001b8`);
-    output.write(`\u001b7\u001b[${bottomRow};1H\u001b[2K${border}\u001b8`);
+    output.write(`\u001b[${top};1H\u001b[2K${border}`);
+    output.write(`\u001b[${bottomRow};1H\u001b[2K${border}`);
+    const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
+    const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
+    output.write(`\u001b[${inputRow};${targetCol}H`);
   }
 
   function drawFixedComposerRail() {
@@ -4119,7 +4123,9 @@ async function interactive(config, auth, configPath, existingState) {
       transcriptCursorSaved = true;
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail();
-      output.write(`\u001b[${inputRow};1H\r\u001b[3C`);
+      const cursorCol = typeof rl?.line === "string" ? rl.line.length : 0;
+      const targetCol = 3 + cursorCol + 1;
+      output.write(`\u001b[${inputRow};${targetCol}H`);
       rl.setFixedRow?.(inputRow);
       rl.resetRenderAnchor?.();
       rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
