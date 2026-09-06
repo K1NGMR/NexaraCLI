@@ -19,6 +19,36 @@ function runNpm(args, options) {
   });
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The CI branch below is the only network-dependent step in this whole
+ * suite -- a real `npm install` against the registry to resolve this
+ * package's own dependencies. Every other test, including this same
+ * assertion's local (non-CI) branch, is fully offline and has never been
+ * observed to fail; a release blocked on this one live network call is
+ * exactly the kind of thing a transient registry hiccup or a runner's DNS
+ * blip takes out with zero code being at fault. Retrying a few times before
+ * failing the whole release keeps this test meaningful (a genuinely broken
+ * package.json/dependency tree still fails after the retries) without
+ * making an entire release hostage to one flaky network call.
+ */
+async function withNetworkRetry(fn, { attempts = 3, delayMs = 2000 } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        console.error(`[pack-smoke] npm install attempt ${attempt}/${attempts} failed, retrying: ${error?.message || error}`);
+        await sleep(delayMs * attempt);
+      }
+    }
+  }
+  throw lastError;
+}
+
 test("packed CLI installs and starts without the source checkout", async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "nexara-cli-pack-"));
   try {
@@ -33,10 +63,17 @@ test("packed CLI installs and starts without the source checkout", async () => {
     let launchCwd = tempRoot;
     if (process.env.CI === "true") {
       const installRoot = path.join(tempRoot, "installed");
-      await runNpm(["install", "--prefix", installRoot, path.join(tempRoot, packageName), "--ignore-scripts", "--no-audit", "--no-fund"], {
-        cwd: process.cwd(),
-        env: { ...process.env, npm_config_cache: path.join(tempRoot, "npm-cache") },
-        maxBuffer: 4 * 1024 * 1024,
+      let attempt = 0;
+      await withNetworkRetry(() => {
+        attempt += 1;
+        // A fresh cache directory per attempt -- reusing one across retries
+        // risks a partially-written cache entry from a failed attempt
+        // poisoning the next try instead of actually retrying clean.
+        return runNpm(["install", "--prefix", installRoot, path.join(tempRoot, packageName), "--ignore-scripts", "--no-audit", "--no-fund"], {
+          cwd: process.cwd(),
+          env: { ...process.env, npm_config_cache: path.join(tempRoot, `npm-cache-${attempt}`) },
+          maxBuffer: 4 * 1024 * 1024,
+        });
       });
       entrypoint = path.join(installRoot, "node_modules", "nexara-cli", "bin", "nexara.js");
       launchCwd = installRoot;
