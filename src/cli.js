@@ -4043,9 +4043,8 @@ async function interactive(config, auth, configPath, existingState) {
       const inputRow = transcriptBottom() + 2;
       output.write("\u001b[s");
       transcriptCursorSaved = true;
-      drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[1;${transcriptBottom()}r`);
-      drawFixedComposerRail({ includeInput: true });
+      drawFixedComposerRail({ includeInput: false });
       output.write(`\u001b[${inputRow};1H`);
       rl.resetRenderAnchor?.();
       rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
