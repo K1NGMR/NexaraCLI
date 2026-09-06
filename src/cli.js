@@ -4267,10 +4267,7 @@ async function interactive(config, auth, configPath, existingState) {
       pendingMessages.push({ line, files });
       const userRows = userTurnRows(line, files);
       state.prepareTranscript?.(userRows);
-      console.log(`  ${color.dim("▸")} ${color.cream(line)}`);
-      if (files.length) {
-        console.log(`    ${color.muted("Attached")} ${files.map((file) => color.coral(file.filename)).join(color.muted(" · "))}`);
-      }
+      printUserTurn(line, files);
       showComposer();
       return;
     }
