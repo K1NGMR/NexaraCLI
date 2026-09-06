@@ -11,6 +11,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   let closed = false;
   let questionResolver = null;
   let questionRejecter = null;
+  let beforeSubmit = null;
   let stashedDraft = null;
   const restoreDraft = () => {
     if (!stashedDraft) return;
@@ -81,6 +82,12 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       // Strip styling from the prompt and retain the visible glyphs only.
       currentPrompt = String(value || "┃  ").replace(/\u001b\[[0-9;]*m/g, "");
     },
+    setLine(value) {
+      line = String(value ?? "");
+      cursor = line.length;
+      render();
+    },
+    setBeforeSubmit(handler) { beforeSubmit = typeof handler === "function" ? handler : null; },
     on: (...args) => { events.on(...args); return editor; },
     once: (...args) => { events.once(...args); return editor; },
     removeListener: (...args) => { events.removeListener(...args); return editor; },
@@ -185,6 +192,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       const cursorOffset = currentPrompt.length + cursorCol;
       if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
       renderedRows = visibleRows;
+      events.emit("change", line);
       return;
     }
     // Return to the top of the previous render, clear only the editor rows,
@@ -210,9 +218,11 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     const cursorOffset = currentPrompt.length + cursorCol;
     if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
     renderedRows = visibleRows;
+    events.emit("change", line);
   }
 
   function submit() {
+    if (beforeSubmit?.({ line, cursor }) === true) return;
     const value = line;
     line = "";
     cursor = 0;

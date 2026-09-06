@@ -3568,6 +3568,7 @@ async function interactive(config, auth, configPath, existingState) {
   let transcriptCursorSaved = false;
   let composerMounted = false;
   let slashSuggestionLines = 0;
+  let slashSuggestionTop = null;
   let slashSuggestionIndex = -1;
   let slashSuggestionInput = null;
   let slashSuggestionTimer = null;
@@ -3676,6 +3677,18 @@ async function interactive(config, auth, configPath, existingState) {
 
   function clearSlashSuggestions(afterSubmit = false) {
     cancelSlashSuggestionTimer();
+    if (fixedComposer && slashSuggestionLines && slashSuggestionTop != null && output.isTTY) {
+      output.write("\u001b7");
+      for (let index = 0; index < slashSuggestionLines; index += 1) {
+        output.write(`\u001b[${slashSuggestionTop + index};1H\u001b[2K`);
+      }
+      output.write("\u001b8");
+      slashSuggestionLines = 0;
+      slashSuggestionTop = null;
+      slashSuggestionIndex = -1;
+      slashSuggestionInput = null;
+      return;
+    }
     if (!slashSuggestionLines || !output.isTTY) {
       slashSuggestionLines = 0;
       slashSuggestionIndex = -1;
@@ -3698,17 +3711,29 @@ async function interactive(config, auth, configPath, existingState) {
 
   function drawSlashSuggestions() {
     slashSuggestionTimer = null;
-    if (fixedComposer || state.modalOpen || !output.isTTY) return;
+    if (state.modalOpen || !output.isTTY) return;
     const rows = renderSlashSuggestions(rl.line, slashSuggestionIndex);
     if (slashSuggestionLines) clearSlashSuggestions();
     if (!rows.length) return;
+    if (fixedComposer) {
+      if (railTop == null) return;
+      const top = Math.max(1, railTop - rows.length);
+      output.write("\u001b7");
+      rows.forEach((row, index) => {
+        output.write(`\u001b[${top + index};1H\u001b[2K${row}`);
+      });
+      output.write("\u001b8");
+      slashSuggestionLines = rows.length;
+      slashSuggestionTop = top;
+      return;
+    }
     const cursor = typeof rl.getCursorPos === "function" ? rl.getCursorPos() : { cols: 2 };
     output.write(`\r\u001b[${rows.length}L${rows.join("\n")}\n\r\u001b[${Math.max(0, Number(cursor.cols) || 0)}C`);
     slashSuggestionLines = rows.length;
   }
 
   function scheduleSlashSuggestions() {
-    if (fixedComposer || !output.isTTY || state.modalOpen || slashSuggestionTimer) return;
+    if (!output.isTTY || state.modalOpen || slashSuggestionTimer) return;
     if (rl.line !== slashSuggestionInput) {
       slashSuggestionInput = rl.line;
       const matches = slashSuggestionMatches(rl.line);
@@ -3725,8 +3750,11 @@ async function interactive(config, auth, configPath, existingState) {
     const matches = slashSuggestionMatches(rl.line);
     if (!matches.length) return;
     const choice = matches[Math.max(0, Math.min(matches.length - 1, slashSuggestionIndex))];
-    rl.write(null, { ctrl: true, name: "u" });
-    rl.write(`${choice.command} `);
+    if (typeof rl.setLine === "function") rl.setLine(`${choice.command} `);
+    else {
+      rl.write(null, { ctrl: true, name: "u" });
+      rl.write(`${choice.command} `);
+    }
     slashSuggestionIndex = 0;
     scheduleSlashSuggestions();
   }
@@ -3761,6 +3789,20 @@ async function interactive(config, auth, configPath, existingState) {
     scheduleSlashSuggestions();
   };
 
+  rl.setBeforeSubmit?.(() => {
+    if (!fixedComposer) return false;
+    const matches = slashSuggestionMatches(rl.line);
+    if (!matches.length) return false;
+    // An exact command is ready to run. A partial command accepts the current
+    // highlighted match first, so Enter behaves like a completion key while
+    // typing and a submit key once the command is complete.
+    if (matches.length === 1 && rl.line.toLowerCase() === matches[0].command) return false;
+    const selected = matches[Math.max(0, Math.min(matches.length - 1, slashSuggestionIndex))];
+    rl.setLine?.(`${selected.command} `);
+    clearSlashSuggestions();
+    return true;
+  });
+
   // Do not enable terminal mouse reporting here. Readline consumes stdin too;
   // allowing SGR mouse mode to run beside it leaks click packets such as
   // `0;5;6M` into the prompt. Thinking remains available through its keyboard
@@ -3775,6 +3817,15 @@ async function interactive(config, auth, configPath, existingState) {
 
   input.on("keypress", onKeypress);
   input.on("keypress", onSlashKeypress);
+  rl.on?.("change", () => {
+    if (state.modalOpen) return;
+    if (slashSuggestionTimer) cancelSlashSuggestionTimer();
+    if (!slashSuggestionMatches(rl.line).length) {
+      if (slashSuggestionLines) clearSlashSuggestions();
+      return;
+    }
+    scheduleSlashSuggestions();
+  });
   const pendingMessages = [];
   state.pendingMessages = pendingMessages;
   let activeRun = false;
