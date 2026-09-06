@@ -1115,7 +1115,7 @@ function formatToolParamSummary(name, args = {}, cwd = "") {
 }
 
 function printModelChangeMessage(modelName, effort = "", state = null) {
-  if (state) state.clearComposer?.();
+  if (state) state.prepareTranscript?.(2);
   const effortLabel = effort ? ` (${REASONING_EFFORT_LABELS[effort] || effort})` : "";
   console.log(`  ${color.blue("> /model")}`);
   console.log(`  ${color.blue("  ⎿  ")}${color.lightGray(`Model set to ${modelName}${effortLabel}`)}`);
@@ -1126,7 +1126,7 @@ function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}
   if (streamJson || !call) return;
   if (state) {
     setComposerActivity(state, null);
-    state.clearComposer?.();
+    state.prepareTranscript?.(1);
   }
 
   const name = call.name || "tool";
@@ -1145,7 +1145,7 @@ function printToolResult(name, result, { args = {}, cwd = "", error = false, str
   if (streamJson) return;
   if (state) {
     setComposerActivity(state, null);
-    state.clearComposer?.();
+    state.prepareTranscript?.(error && text ? 2 : 1);
   }
 
   const circle = error ? color.red("●") : color.blue("●");
