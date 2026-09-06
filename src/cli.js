@@ -522,7 +522,7 @@ const ANSI_RE = /\u001b\[[0-9;]*m/g;
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
 const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
-const COMPOSER_INPUT_ROWS = 3;
+const COMPOSER_INPUT_ROWS = 1;
 // The fixed-composer session patches output.write (see realContentRows below)
 // to count every newline-terminated write as real, permanent transcript
 // content, so it can re-derive the gap that keeps the composer pinned to the
@@ -4021,59 +4021,39 @@ async function interactive(config, auth, configPath, existingState) {
   }
 
   function drawFixedComposerRail({ includeInput = false } = {}) {
-    const rows = terminalRows();
     const top = transcriptBottom() + 1;
-    railRows = rows;
+    const inputRow = top + 1;
+    const bottomRow = top + 2;
+    railRows = bottomRow;
     railTop = top;
-    const inputStartRow = top;
-    const metadataRow = top + COMPOSER_INPUT_ROWS;
-    const bottomRuleRow = rows;
-    output.write(`\u001b[${top};1H\u001b[2K${fixedComposerMetadataLine()}`);
+    const width = Math.max(20, Number(output.columns) || 80);
+    output.write(`\u001b[${top};1H\u001b[2K${color.blue("─".repeat(width))}`);
     if (includeInput) {
-      for (let row = inputStartRow + 1; row < metadataRow; row += 1) {
-        output.write(`\u001b[${row};1H\u001b[2K\u001b[0m`);
-      }
+      output.write(`\u001b[${inputRow};1H\u001b[2K\u001b[0m`);
     }
-    output.write(`\u001b[${bottomRuleRow};1H\u001b[2K${fixedComposerFooterLine()}`);
+    output.write(`\u001b[${bottomRow};1H\u001b[2K${color.blue("─".repeat(width))}`);
   }
 
   function showComposer() {
     if (closing || rl.closed) return;
     clearComposerFooter();
     if (fixedComposer) {
-      const rows = terminalRows();
-      const inputRow = transcriptBottom() + 1;
-      // Save the transcript cursor, then draw a dedicated four-row rail. The
-      // scroll region prevents long responses from ever pushing the controls.
+      const inputRow = transcriptBottom() + 2;
       output.write("\u001b[s");
       transcriptCursorSaved = true;
-      // Draw the rail BEFORE establishing the scroll region: on Windows
-      // Terminal, issuing DECSTBM (the scroll-region escape) right before
-      // painting rows outside that region can leave the last couple of rows
-      // (the bottom rule and footer here) never actually rendered, even
-      // though the same absolute-cursor writes work fine once the region is
-      // already in place. Draw once now, set the region, then draw again so
-      // the rail is guaranteed visible regardless of that ordering quirk.
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail({ includeInput: true });
       output.write(`\u001b[${inputRow};1H`);
-      // The editor is now anchored at the first input row. Do not let a
-      // previous wrapped draft make render() move upward from this absolute
-      // position before repainting; that leaves the caret spanning/occupying
-      // the wrong row after a resize or focus return.
       rl.resetRenderAnchor?.();
-      rl.setPrompt("\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m");
+      rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
       rl.prompt();
       composerMounted = true;
       return;
     }
     renderComposerFooter();
-    // Paint the entire terminal row using Erase Line under a dark surface
-    // color rather than trusting `stdout.columns` (which can be wrong in
-    // Windows Terminal). This is the clean, full-width command rectangle.
     output.write("\r\u001b[2K\u001b[0m\r");
-    rl.setPrompt("\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m");
+    rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
     rl.prompt();
   }
 
