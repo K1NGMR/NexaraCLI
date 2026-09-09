@@ -2468,7 +2468,7 @@ ${color.cyan("Nexara CLI commands")}
   /login                        Sign in again or switch account
   /quit                         Exit the CLI
 
-${color.dim("Thinking: click the live Thinking indicator to expand the model's emitted reasoning.")}
+${color.dim("Thinking: press Ctrl+T while a response is running to expand or collapse emitted reasoning.")}
 ${color.dim("Tip: type / and press Tab to autocomplete; use ↑/↓ or numpad arrows to browse.")}
 ${color.dim("Pipes: set NO_COLOR=1 for plain output, or use --output-format json|stream-json for automation.")}
 
@@ -4084,6 +4084,10 @@ async function interactive(config, auth, configPath, existingState) {
     if (state.modalOpen) return;
     if (key?.ctrl && key.name === "c") {
       if (state.cancelCurrent) state.cancelCurrent();
+      return;
+    }
+    if (key?.ctrl && key.name === "t") {
+      if (state.toggleThinking) state.toggleThinking();
       return;
     }
     if (key?.ctrl && key.name === "o") {
