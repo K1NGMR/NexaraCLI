@@ -136,3 +136,65 @@ test("submitting a normal line emits 'line' and clears the buffer", () => {
   assert.deepEqual(lines, ["hello"]);
   assert.equal(editor.line, "");
 });
+
+// The Chatbox is three rows: a border, the input row, a border. The caret is
+// only ever allowed on the middle one. These cover the ways it used to escape.
+test("repaint always paints the input row, never the border row above it", () => {
+  const { input, output } = fakeStreams();
+  const writes = [];
+  output.write = (value) => { writes.push(String(value)); return true; };
+  const editor = createTerminalEditor({ input, output, width: () => 40, rows: () => 1 });
+  let railTop = 20;
+  editor.setFixedRow(() => railTop + 1);
+  editor.pause("muted");
+  for (const char of "hi") press(input, char);
+  writes.length = 0;
+  editor.repaint();
+  const painted = writes.join("");
+  assert.equal(painted.includes("\u001b[21;1H"), true, "must paint the input row");
+  assert.equal(painted.includes("\u001b[20;1H"), false, "must never paint the border row");
+  // The rail moves (remount after a tool call, resize). A live row resolver
+  // means the very next repaint follows it instead of writing to a stale row.
+  railTop = 30;
+  writes.length = 0;
+  editor.repaint();
+  const moved = writes.join("");
+  assert.equal(moved.includes("\u001b[31;1H"), true);
+  assert.equal(moved.includes("\u001b[21;1H"), false);
+});
+
+test("the caret is parked inside the input row and never past the last column", () => {
+  const { input, output } = fakeStreams();
+  const writes = [];
+  output.write = (value) => { writes.push(String(value)); return true; };
+  const editor = createTerminalEditor({ input, output, width: () => 40, rows: () => 1 });
+  editor.setFixedRow(() => 15);
+  for (const char of "abc") press(input, char);
+  writes.length = 0;
+  assert.equal(editor.parkCursor(), true);
+  assert.equal(writes.join(""), "\u001b[15;7H");
+
+  // A line far longer than the terminal is wrapped by the editor itself, so
+  // the caret column stays inside the row -- the terminal never gets a chance
+  // to wrap it onto the next row and scroll the rail up.
+  for (const char of "x".repeat(300)) press(input, char);
+  writes.length = 0;
+  editor.parkCursor();
+  const [, column] = /\u001b\[15;(\d+)H/.exec(writes.join("")) || [];
+  assert.ok(Number(column) <= 40, `caret column ${column} must stay within the terminal width`);
+});
+
+test("a fixed row keeps every ordinary keystroke redraw on the input row", () => {
+  const { input, output } = fakeStreams();
+  const writes = [];
+  output.write = (value) => { writes.push(String(value)); return true; };
+  const editor = createTerminalEditor({ input, output, width: () => 40, rows: () => 1 });
+  editor.setFixedRow(() => 12);
+  writes.length = 0;
+  press(input, "q");
+  const painted = writes.join("");
+  assert.equal(painted.includes("\u001b[12;1H"), true);
+  // Relative cursor movement is what used to drift the composer onto other
+  // rows; with a fixed row there must be none of it.
+  assert.equal(/\u001b\[\d*[AB]/.test(painted), false, "no relative row movement while pinned");
+});

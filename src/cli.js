@@ -522,6 +522,12 @@ const ANSI_RE = /\u001b\[[0-9;]*m/g;
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
 const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
+// Cap on how many transcript rows the live thinking preview is allowed to
+// grow into. Wrapping instead of truncating a single line means the preview
+// can keep expanding as reasoning streams in; this bounds how much of the
+// scroll region it is allowed to claim before it starts scrolling itself
+// (oldest wrapped line drops off first, same as a tail).
+const MAX_THINKING_PREVIEW_ROWS = 4;
 const COMPOSER_INPUT_ROWS = 1;
 // The fixed-composer session patches output.write (see realContentRows below)
 // to count every newline-terminated write as real, permanent transcript
@@ -596,6 +602,41 @@ function livePreviewLine(prefix, text, maxWidth, fallback) {
 
 function thinkingPreviewLine(text, maxWidth) {
   return livePreviewLine("Thinking: ", stripInlineMarkdownEmphasis(text), maxWidth, "Thinking…");
+}
+
+// Greedy word-wrap: fills each line up to `width` before moving to the next
+// word, same as a terminal's own line wrap.
+function wrapTextToLines(text, width) {
+  const words = String(text || "").split(" ").filter(Boolean);
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (visibleLength(candidate) > width && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  lines.push(current);
+  return lines;
+}
+
+// Multi-line counterpart to livePreviewLine: instead of keeping only the
+// tail of ONE line (cutting off everything before it behind a leading "…"),
+// this wraps the live text across up to `maxLines` rows so it stays fully
+// readable as it grows, only dropping the earliest wrapped lines once it
+// outgrows that budget -- a tail over whole lines rather than characters.
+function thinkingPreviewLines(text, maxWidth, maxLines) {
+  const flattened = stripInlineMarkdownEmphasis(String(text || "")).replace(/\s+/g, " ").trim();
+  if (!flattened) return ["Thinking…"];
+  const prefix = "Thinking: ";
+  const indent = " ".repeat(visibleLength(prefix));
+  const width = Math.max(8, maxWidth - visibleLength(prefix));
+  const wrapped = wrapTextToLines(flattened, width);
+  const labeled = wrapped.map((line, i) => `${i === 0 ? prefix : indent}${line}`);
+  return labeled.length > maxLines ? labeled.slice(-maxLines) : labeled;
 }
 
 // A live truncated tail of the response as it streams in -- shown in place
@@ -685,11 +726,24 @@ function createActivityLine({ quiet = false, streamJson = false, getCursorOffset
     const paint = [color.coral, color.amber, color.teal, color.coral][frame % 4];
     // Preferred path: a reserved transcript row, painted in place at an
     // absolute address, so the live status sits where the answer will land.
-    if (transcript?.begin?.()) {
-      const inline = `  ${paint(glyph)} ${color.muted(activityLineText(Math.max(20, terminalWidth() - 10)))} ${color.dim(`${seconds}s`)}`;
-      if (transcript.paint?.(inline)) {
-        visible = true;
-        return;
+    if (transcript?.begin) {
+      const width = Math.max(20, terminalWidth() - 10);
+      // Thinking gets a live multi-line word-wrapped tail instead of a
+      // single truncated line -- every other status keeps the one-line
+      // treatment, unchanged.
+      const lines = status === "thinking" && getThinkingPreview
+        ? thinkingPreviewLines(getThinkingPreview(), width, MAX_THINKING_PREVIEW_ROWS)
+        : [activityLineText(width)];
+      if (transcript.begin(lines.length)) {
+        const painted = lines.map((text, i) => (
+          i === 0
+            ? `  ${paint(glyph)} ${color.muted(text)} ${color.dim(`${seconds}s`)}`
+            : `    ${color.muted(text)}`
+        ));
+        if (transcript.paint?.(painted)) {
+          visible = true;
+          return;
+        }
       }
     }
     // Fallback: readline owns the active composer row, so a relative move
@@ -2806,8 +2860,8 @@ async function runPrompt(state, text, { mode, goal, files = [], onStart, already
       getCursorOffset: () => state.composerFooterLines ? state.composerFooterLines + 1 : 0,
       getCursorCol: () => state.getCursorCol ? state.getCursorCol() : 0,
       transcript: quiet ? null : {
-        begin: () => Boolean(state.beginTranscriptActivity?.()),
-        paint: (line) => Boolean(state.paintTranscriptActivity?.(line)),
+        begin: (rows) => Boolean(state.beginTranscriptActivity?.(rows)),
+        paint: (lines) => Boolean(state.paintTranscriptActivity?.(lines)),
         end: () => state.endTranscriptActivity?.(),
       },
       // Always show a live tail of the actual reasoning instead of a static
@@ -3557,6 +3611,11 @@ async function interactive(config, auth, configPath, existingState) {
   // prints so its rows count too.
   let realContentRows = 0;
   let paintingBox = false;
+  // Assigned once the fixed composer exists (see scheduleComposerCursorPark).
+  // Any write that completes a row is, by definition, transcript output that
+  // moved the real cursor away from the Chatbox -- so it schedules the caret
+  // back.
+  let afterTranscriptWrite = null;
   const outputWrite = output.write.bind(output);
   output.write = (chunk, ...rest) => {
     if (!paintingBox && !suppressRealContentRowCount && chunk) {
@@ -3570,6 +3629,7 @@ async function interactive(config, auth, configPath, existingState) {
       for (let index = 0; index < segments.length - 1; index += 1) {
         realContentRows += Math.max(1, Math.ceil((visibleLength(segments[index]) || 0) / columns));
       }
+      if (segments.length > 1) afterTranscriptWrite?.();
     }
     return outputWrite(chunk, ...rest);
   };
@@ -3652,13 +3712,44 @@ async function interactive(config, auth, configPath, existingState) {
   // the key invariant that prevents autocomplete, resize and streamed output
   // from ever cutting through the input surface in Windows Terminal.
   const fixedComposer = Boolean(input.isTTY && output.isTTY);
+  // The one and only way the caret is put back after anything else touched
+  // the screen. It delegates to the editor, which resolves the live input row
+  // and the caret's real column together -- so the caret is structurally
+  // incapable of landing on a border row, in the transcript, or off the right
+  // edge, no matter what the model, a tool call, or a notice just printed.
+  const parkComposerCursor = () => {
+    if (!fixedComposer || !output.isTTY || railTop == null) return false;
+    return Boolean(rl.parkCursor?.());
+  };
+  // Anything that prints transcript rows does so as a burst of synchronous
+  // writes and relies on the cursor flowing between them, so the caret cannot
+  // be reclaimed in the middle of one. Coalesce to a single park once the
+  // burst has finished (setImmediate runs after the whole synchronous print),
+  // which is what makes "the AI is writing" unable to steal the caret.
+  let composerParkScheduled = false;
+  const scheduleComposerCursorPark = () => {
+    if (composerParkScheduled) return;
+    composerParkScheduled = true;
+    setImmediate(() => {
+      composerParkScheduled = false;
+      if (closing || rl.closed || questionActive || state.modalOpen) return;
+      if (!composerMounted || rl.inputMode === "blocked") return;
+      parkComposerCursor();
+    });
+  };
+  afterTranscriptWrite = scheduleComposerCursorPark;
   // While a response is streaming, the editor's relative redraw is muted to
   // protect the transcript's absolute cursor writes. Repaint the draft at
   // its fixed absolute rows immediately on every change so type-ahead never
   // waits for the next status tick to become visible.
   if (fixedComposer && typeof rl.on === "function") {
     rl.on("change", () => {
-      if (state.busy && composerMounted && railTop != null) rl.renderAt?.(railTop);
+      // repaint() resolves the composer's OWN input row. This used to pass
+      // railTop -- the rail's top BORDER row -- so every keystroke typed
+      // while the model was working painted the draft onto the dashes and
+      // left the caret sitting there, which is what made typing appear to
+      // edit the border instead of the Chatbox.
+      if (state.busy && composerMounted && railTop != null) rl.repaint?.();
     });
   }
   // Match terminalWidth()'s margin below: writing to a terminal's literal
@@ -3714,54 +3805,73 @@ async function interactive(config, auth, configPath, existingState) {
   // column on the way back, which is what desynced the input caret and got
   // the inline line disabled for interactive sessions.
   let activityRow = null;
-  state.beginTranscriptActivity = () => {
+  // transcriptFlowRow immediately after this activity row was (re-)reserved.
+  // Lets endTranscriptActivity detect whether anything else printed to the
+  // transcript in the meantime -- e.g. a message the user submitted (and
+  // which onLine prints eagerly) while this turn was still streaming. If
+  // flow has moved on, that space is no longer ours to hand back; doing so
+  // anyway is what let a still-in-flight turn's own final response overwrite
+  // and blank out a message that was queued behind it.
+  let activityFlowMark = null;
+  // Rows currently reserved for the activity block. The live thinking
+  // preview wraps across multiple rows and grows as more reasoning streams
+  // in, so this is no longer always 1.
+  let activityRowCount = 0;
+  state.beginTranscriptActivity = (rows = 1) => {
     if (!fixedComposer || !output.isTTY) return false;
+    const wanted = Math.max(1, Number(rows) || 1);
     // A tool call, notice, or approval prompt printed during the turn pushes
-    // the transcript tail below the reserved row. Re-reserve so the live line
-    // keeps trailing the newest content instead of animating in place above
-    // it. realContentRows only counts newline-terminated writes, so the
-    // spinner's own in-place repaints never trigger this.
+    // the transcript tail below the reserved row(s). Re-reserve so the live
+    // line keeps trailing the newest content instead of animating in place
+    // above it. realContentRows only counts newline-terminated writes, so
+    // the spinner's own in-place repaints never trigger this. Also
+    // re-reserve when the caller now needs more rows than we currently hold
+    // (the thinking preview grew to another wrapped line).
     const tail = Math.min(transcriptBottom(), realContentRows + 1);
-    if (activityRow != null && tail <= activityRow) return true;
-    if (activityRow != null && activityRow <= transcriptBottom()) {
-      output.write(`\u001b[${activityRow};1H\u001b[2K`);
+    if (activityRow != null && tail <= activityRow && wanted <= activityRowCount) return true;
+    if (activityRow != null) {
+      for (let row = activityRow; row < activityRow + activityRowCount && row <= transcriptBottom(); row += 1) {
+        output.write(`\u001b[${row};1H\u001b[2K`);
+      }
     }
-    activityRow = state.prepareTranscript(1);
+    activityRow = state.prepareTranscript(wanted);
+    activityRowCount = activityRow != null ? wanted : 0;
+    activityFlowMark = transcriptFlowRow;
     state.transcriptActivityActive = activityRow != null;
-    if (railTop != null) {
-      const inputRow = railTop + 1;
-      const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
-      const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
-      output.write(`\u001b[${inputRow};${targetCol}H`);
-    }
+    if (railTop != null) parkComposerCursor();
     return state.transcriptActivityActive;
   };
-  state.paintTranscriptActivity = (text) => {
+  // `lines` may be a single string (legacy single-row callers) or an array
+  // of strings, one per reserved row -- the live thinking preview paints one
+  // wrapped line per row instead of overwriting a single row over and over.
+  state.paintTranscriptActivity = (lines) => {
     if (activityRow == null || !output.isTTY) return false;
     if (activityRow > transcriptBottom()) return false;
-    output.write(`\u001b[${activityRow};1H\u001b[2K${text}`);
-    if (railTop != null) {
-      const inputRow = railTop + 1;
-      const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
-      const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
-      output.write(`\u001b[${inputRow};${targetCol}H`);
+    const rows = Array.isArray(lines) ? lines : [lines];
+    for (let i = 0; i < activityRowCount; i += 1) {
+      const row = activityRow + i;
+      if (row > transcriptBottom()) break;
+      output.write(`\u001b[${row};1H\u001b[2K${rows[i] ?? ""}`);
     }
+    if (railTop != null) parkComposerCursor();
     return true;
   };
   state.endTranscriptActivity = () => {
     if (activityRow == null) return;
-    if (activityRow <= transcriptBottom()) output.write(`\u001b[${activityRow};1H\u001b[2K`);
-    // Hand the reserved row back so the response (or the next tool line) is
-    // written over the spinner instead of leaving a blank gap behind it.
-    transcriptFlowRow = Math.max(1, activityRow);
-    activityRow = null;
-    state.transcriptActivityActive = false;
-    if (railTop != null) {
-      const inputRow = railTop + 1;
-      const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
-      const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
-      output.write(`\u001b[${inputRow};${targetCol}H`);
+    for (let row = activityRow; row < activityRow + activityRowCount && row <= transcriptBottom(); row += 1) {
+      output.write(`\u001b[${row};1H\u001b[2K`);
     }
+    // Hand the reserved rows back so the response (or the next tool line) is
+    // written over the spinner instead of leaving a blank gap behind it --
+    // but only when flow hasn't moved since we reserved it. If it has (a
+    // queued message got printed in between), rewinding would let whatever
+    // prints next clobber that content instead of continuing after it.
+    if (transcriptFlowRow === activityFlowMark) transcriptFlowRow = Math.max(1, activityRow);
+    activityRow = null;
+    activityRowCount = 0;
+    activityFlowMark = null;
+    state.transcriptActivityActive = false;
+    if (railTop != null) parkComposerCursor();
   };
   let transcriptCursorSaved = false;
   let composerMounted = false;
@@ -3790,8 +3900,11 @@ async function interactive(config, auth, configPath, existingState) {
       // when no composer cursor has been saved for restoration.
       const preserveCurrentCursor = !transcriptCursorSaved;
       if (preserveCurrentCursor) output.write("\u001b[s");
-      // Erase only the reserved rail. Never clear the transcript viewport.
-      output.write("\u001b[r");
+      // Erase only the reserved rail. Never clear the transcript viewport,
+      // and never widen the scroll region back to the full screen: absolute
+      // addressing reaches these rows regardless, while a full-screen region
+      // lets the terminal's own scrolling drag the rail up a row the next
+      // time anything prints at the bottom.
       for (let row = top; row <= rows; row += 1) output.write(`\u001b[${row};1H\u001b[2K`);
       output.write("\u001b[0m");
       // `showComposer` saves the transcript position before moving to the
@@ -3886,12 +3999,7 @@ async function interactive(config, auth, configPath, existingState) {
       slashSuggestionTop = null;
       slashSuggestionIndex = -1;
       slashSuggestionInput = null;
-      if (railTop != null) {
-        const inputRow = railTop + 1;
-        const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
-        const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
-        output.write(`\u001b[${inputRow};${targetCol}H`);
-      }
+      if (railTop != null) parkComposerCursor();
       return;
     }
     if (!slashSuggestionLines || !output.isTTY) {
@@ -4111,9 +4219,10 @@ async function interactive(config, auth, configPath, existingState) {
     const border = color.blue("─".repeat(width));
     output.write(`\u001b[${top};1H\u001b[2K${border}`);
     output.write(`\u001b[${bottomRow};1H\u001b[2K${border}`);
-    const cursor = typeof rl?.getCursorPos === "function" ? rl.getCursorPos() : { cols: 3 };
-    const targetCol = Math.max(1, Number(cursor.cols) || 3) + 1;
-    output.write(`\u001b[${inputRow};${targetCol}H`);
+    // Repaint the draft at its own row and leave the caret in it. A spinner
+    // tick must never be able to reposition the caret by arithmetic of its
+    // own -- inputRow is kept only for the fallback below.
+    if (!rl.repaint?.()) output.write(`\u001b[${inputRow};4H`);
   }
 
   function drawFixedComposerRail() {
@@ -4127,7 +4236,7 @@ async function interactive(config, auth, configPath, existingState) {
     const promptStr = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
     const text = typeof rl?.line === "string" ? rl.line : "";
     output.write(`\u001b[${top};1H\u001b[2K${border}`);
-    output.write(`\u001b[${inputRow};1H\u001b[2K${promptStr}\u001b[38;2;250;249;245m${text}\u001b[0m`);
+    output.write(`\u001b[${inputRow};1H\u001b[2K${promptStr}\u001b[38;2;250;249;245m${text.slice(0, Math.max(0, width - 4))}\u001b[0m`);
     output.write(`\u001b[${bottomRow};1H\u001b[2K${border}`);
   }
 
@@ -4141,13 +4250,14 @@ async function interactive(config, auth, configPath, existingState) {
       transcriptCursorSaved = true;
       output.write(`\u001b[1;${transcriptBottom()}r`);
       drawFixedComposerRail();
-      const cursorCol = typeof rl?.line === "string" ? rl.line.length : 0;
-      const targetCol = 3 + cursorCol + 1;
-      output.write(`\u001b[${inputRow};${targetCol}H`);
-      rl.setFixedRow?.(inputRow);
+      // A live resolver, not a snapshot: the rail can be redrawn at a new
+      // position (resize, remount after a tool call) and the editor follows it
+      // on the very next repaint instead of keeping a row that has moved.
+      rl.setFixedRow?.(() => (railTop == null ? inputRow : railTop + 1));
       rl.resetRenderAnchor?.();
       rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
       composerMounted = true;
+      if (!rl.repaint?.()) output.write(`\u001b[${inputRow};4H`);
       return;
     }
     renderComposerFooter();

@@ -69,9 +69,18 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   let pasting = false;
   let pasteBuffer = "";
 
-    let fixedRow = null;
+  // The absolute screen row the composer's input line lives on. The rail
+  // that draws the Chatbox owns this value, and a callback is accepted so
+  // every repaint and every caret park resolves it FRESH. A cached row the
+  // rail had since moved is exactly how the caret ended up sitting on -- and
+  // typing over -- the border ("dashes") row above the input.
+  let fixedRowSource = null;
+  const resolvedFixedRow = () => {
+    const value = typeof fixedRowSource === "function" ? fixedRowSource() : fixedRowSource;
+    return Number.isInteger(value) && value > 0 ? value : null;
+  };
 
-    const editor = {
+  const editor = {
     get line() { return line; },
     get closed() { return closed; },
     pause(mode = "blocked") { inputMode = mode; },
@@ -90,8 +99,27 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       render();
     },
     setFixedRow(row) {
-      fixedRow = Number.isInteger(row) && row > 0 ? row : null;
+      if (typeof row === "function") fixedRowSource = row;
+      else fixedRowSource = Number.isInteger(row) && row > 0 ? row : null;
     },
+    get fixedRow() { return resolvedFixedRow(); },
+    get inputMode() { return inputMode; },
+    // Force an absolute repaint of the input row, even while redraws are
+    // muted. Muting exists to stop the RELATIVE redraw path from racing the
+    // transcript's absolute writes; painting the composer at its own fixed
+    // row is never part of that race. Callers no longer pass a row of their
+    // own -- passing the rail's TOP row here is what painted the composer
+    // onto the border line (and left the caret there) while the model was
+    // working.
+    repaint() {
+      const row = resolvedFixedRow();
+      if (row) render(row);
+      return Boolean(row);
+    },
+    // Put the caret back inside the input row without repainting anything.
+    // Anything that prints to the transcript calls this afterwards, so the
+    // caret is never left parked wherever the last write happened to end.
+    parkCursor() { return parkCursor(); },
     setBeforeSubmit(handler) { beforeSubmit = typeof handler === "function" ? handler : null; },
     on: (...args) => { events.on(...args); return editor; },
     once: (...args) => { events.once(...args); return editor; },
@@ -152,15 +180,11 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     output.write(`\r\u001b[2K${text}\n`);
   }
 
-  function render() {
-    if (closed) return;
-    const explicitRow = arguments.length ? Number(arguments[0]) : null;
-    if (inputMode === "muted" && !Number.isInteger(explicitRow)) {
-      events.emit("change", line);
-      return;
-    }
-    const absoluteRow = explicitRow ?? fixedRow;
-    const columns = Math.max(24, Number(width()) || 80);
+  // Lay the current line out into the wrapped rows the editor viewport shows
+  // and work out where the caret sits inside them. Shared by render() and
+  // parkCursor() so a caret park can never disagree with the last repaint
+  // about which column the caret belongs in.
+  function computeLayout(columns) {
     const available = Math.max(1, columns - currentPrompt.length - 3);
     const maxRows = Math.max(1, Number(rows()) || 3);
     const chunks = [];
@@ -185,15 +209,56 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     );
     // Never let wrapped input escape the reserved editor viewport.
     const visibleChunks = chunks.slice(firstRow, firstRow + maxRows);
-    const visibleCursorRow = Math.max(0, cursorRow - firstRow);
-    const visibleRows = Math.max(1, visibleChunks.length);
-    if (Number.isInteger(absoluteRow) && absoluteRow > 0) {
+    return {
+      visibleChunks,
+      visibleCursorRow: Math.max(0, cursorRow - firstRow),
+      visibleRows: Math.max(1, visibleChunks.length),
+      cursorCol,
+    };
+  }
+
+  // Move the real terminal caret to the composer's input row/column. This is
+  // the single place that decides where the caret is allowed to be, so it can
+  // only ever land inside the Chatbox: never on a border row, and never past
+  // the right edge where the terminal would wrap it onto the row below (which
+  // then scrolls the rail).
+  function parkCursor() {
+    if (closed) return false;
+    const row = resolvedFixedRow();
+    if (!row) return false;
+    const columns = Math.max(24, Number(width()) || 80);
+    const { cursorCol } = computeLayout(columns);
+    const targetCol = Math.max(1, Math.min(columns, currentPrompt.length + cursorCol + 1));
+    output.write(`\u001b[${row};${targetCol}H`);
+    return true;
+  }
+
+  function render() {
+    if (closed) return;
+    const explicitRow = arguments.length ? Number(arguments[0]) : null;
+    const hasExplicitRow = Number.isInteger(explicitRow) && explicitRow > 0;
+    if (inputMode === "muted" && !hasExplicitRow) {
+      events.emit("change", line);
+      return;
+    }
+    const absoluteRow = hasExplicitRow ? explicitRow : resolvedFixedRow();
+    const columns = Math.max(24, Number(width()) || 80);
+    const { visibleChunks, visibleCursorRow, visibleRows, cursorCol } = computeLayout(columns);
+    if (absoluteRow) {
       const row = absoluteRow;
-      const visible = visibleChunks[0] || "";
+      // Hard-clip to the row's own width. computeLayout already wraps at a
+      // narrower budget, but a stale width() reading (mid-resize) must not be
+      // able to push a character past the last column: the terminal would
+      // wrap it onto the next row and scroll the whole rail up by one, which
+      // is precisely how the input line ended up overwriting the border.
+      const budget = Math.max(0, columns - currentPrompt.length - 1);
+      const visible = (visibleChunks[0] || "").slice(0, budget);
       const promptFormatted = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
       const textFormatted = `\u001b[38;2;250;249;245m${visible}\u001b[0m`;
-      output.write(`\u001b[${row};1H\u001b[2K${promptFormatted}${textFormatted}`);
-      const targetCol = currentPrompt.length + cursorCol + 1;
+      // Autowrap off for the duration of the paint: belt-and-braces against
+      // that same one-row scroll.
+      output.write(`\u001b[?7l\u001b[${row};1H\u001b[2K${promptFormatted}${textFormatted}\u001b[?7h`);
+      const targetCol = Math.max(1, Math.min(columns, currentPrompt.length + cursorCol + 1));
       output.write(`\u001b[${row};${targetCol}H`);
       renderedRows = 1;
       return;
@@ -283,7 +348,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     const sequence = key.sequence || str || "";
     if (key.ctrl && name === "c") return;
     if (name === "return" || name === "enter" || sequence === "\r" || sequence === "\n") {
-      if (key.shift && !fixedRow) {
+      if (key.shift && !resolvedFixedRow()) {
         line = `${line.slice(0, cursor)}\n${line.slice(cursor)}`;
         cursor += 1;
         render();
