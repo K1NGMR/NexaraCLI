@@ -521,6 +521,43 @@ const color = {
   terminalWhite: rgb(250, 249, 245),
 };
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
+const cliGraphemeSegmenter = typeof Intl?.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+const cliCombiningMarkPattern = /^\p{Mark}+$/u;
+const cliEmojiPattern = /\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]/u;
+const cliWideCharacterPattern = /[\u{1100}-\u{115F}\u{2329}\u{232A}\u{2E80}-\u{A4CF}\u{AC00}-\u{D7A3}\u{F900}-\u{FAFF}\u{FE10}-\u{FE19}\u{FE30}-\u{FE6F}\u{FF00}-\u{FF60}\u{FFE0}-\u{FFE6}]/u;
+
+function cliGraphemes(value) {
+  const text = String(value ?? "");
+  return cliGraphemeSegmenter
+    ? Array.from(cliGraphemeSegmenter.segment(text), ({ segment }) => segment)
+    : Array.from(text);
+}
+
+function cliCellWidth(value) {
+  const text = String(value ?? "");
+  if (!text || text === "\n" || cliCombiningMarkPattern.test(text)) return 0;
+  if (cliEmojiPattern.test(text) || cliWideCharacterPattern.test(text)) return 2;
+  return 1;
+}
+
+function clipVisibleCells(value, maxCells) {
+  const limit = Math.max(0, Number(maxCells) || 0);
+  let used = 0;
+  let result = "";
+  for (const grapheme of cliGraphemes(value)) {
+    const width = cliCellWidth(grapheme);
+    if (used + width > limit) break;
+    result += grapheme;
+    used += width;
+  }
+  return result;
+}
+
+function terminalCellWidth(value) {
+  return cliGraphemes(value).reduce((total, grapheme) => total + cliCellWidth(grapheme), 0);
+}
 const ACTIVITY_FRAMES = ["✦", "✧", "❖", "✧", "✦", "⋆", "✧", "·"];
 const PROCESSING_FRAMES = ["✦", "✧", "·", "✧"];
 const THINKING_FRAMES = ["◐", "◓", "◑", "◒"];
@@ -998,8 +1035,8 @@ function displayPath(directory = process.cwd()) {
   return directory;
 }
 
-function visibleLength(text) {
-  return String(text).replace(ANSI_RE, "").length;
+export function visibleLength(text) {
+  return terminalCellWidth(String(text).replace(ANSI_RE, ""));
 }
 
 function terminalWidth() {
@@ -1053,10 +1090,10 @@ function clearTerminalForSession() {
   output.write("\u001b[r\u001b[0m\u001b[?1006l\u001b[?1000l\u001b[2J\u001b[H");
 }
 
-function shorten(text, width) {
+export function shorten(text, width) {
   if (visibleLength(text) <= width) return text;
   const plain = String(text).replace(ANSI_RE, "");
-  return `${plain.slice(0, Math.max(1, width - 1))}…`;
+  return `${clipVisibleCells(plain, Math.max(1, width - 1))}…`;
 }
 
 function panelLine(text, innerWidth) {
@@ -4201,7 +4238,15 @@ async function interactive(config, auth, configPath, existingState) {
     const chunks = [];
     for (const segment of text.split("\n")) {
       if (!segment.length) chunks.push("");
-      else for (let index = 0; index < segment.length; index += available) chunks.push(segment.slice(index, index + available));
+      else {
+        let remaining = segment;
+        while (remaining) {
+          const chunk = clipVisibleCells(remaining, available);
+          if (!chunk) break;
+          chunks.push(chunk);
+          remaining = remaining.slice(chunk.length);
+        }
+      }
     }
     // Show the tail -- the most recently typed text is what's actually in
     // progress, the same reasoning the live "Thinking"/"Writing" previews use.

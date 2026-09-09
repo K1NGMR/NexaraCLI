@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { consumeDataLine } from "../src/api.js";
-import { toolAccessDecision, usageCompute, usesStructuredOutput } from "../src/cli.js";
+import { shorten, toolAccessDecision, usageCompute, usesStructuredOutput, visibleLength } from "../src/cli.js";
 
 function stateFor(permissionMode) {
   return { config: { permissionMode, allowedTools: [], disallowedTools: [] } };
@@ -43,6 +43,15 @@ test("structured output modes reserve stdout for machine-readable events", () =>
   assert.equal(usesStructuredOutput(jsonState), true);
   assert.equal(usesStructuredOutput(streamJsonState), true);
   assert.equal(usesStructuredOutput(textState, true), true);
+});
+
+test("terminal width helpers count cells without splitting graphemes", () => {
+  assert.equal(visibleLength("😀"), 2);
+  assert.equal(visibleLength("e\u0301"), 1);
+  assert.equal(visibleLength("界"), 2);
+  assert.equal(shorten("😀😀", 3), "😀…");
+  assert.equal(shorten("e\u0301x", 2), "e\u0301x");
+  assert.equal(shorten("e\u0301xy", 2), "e\u0301…");
 });
 
 test("billed server Compute takes precedence over stale client pricing", () => {
