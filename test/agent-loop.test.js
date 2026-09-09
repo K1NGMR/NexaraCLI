@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { consumeDataLine } from "../src/api.js";
-import { toolAccessDecision, usageCompute } from "../src/cli.js";
+import { toolAccessDecision, usageCompute, usesStructuredOutput } from "../src/cli.js";
 
 function stateFor(permissionMode) {
   return { config: { permissionMode, allowedTools: [], disallowedTools: [] } };
@@ -30,6 +30,19 @@ test("an explicitly allowed mutating tool still cannot override read-only/plan m
 test("disallowed-tools always denies, even non-mutating tools", () => {
   const state = { config: { permissionMode: "full", allowedTools: [], disallowedTools: ["Read"] } };
   assert.equal(toolAccessDecision(state, "Read").action, "deny");
+});
+
+test("structured output modes reserve stdout for machine-readable events", () => {
+  const textState = { outputFormat: "text" };
+  const jsonState = { outputFormat: "json" };
+  const streamJsonState = { outputFormat: "stream-json" };
+
+  // This is the same mode boundary used by local-tool rendering: human
+  // transcript lines must not leak into either machine-readable format.
+  assert.equal(usesStructuredOutput(textState), false);
+  assert.equal(usesStructuredOutput(jsonState), true);
+  assert.equal(usesStructuredOutput(streamJsonState), true);
+  assert.equal(usesStructuredOutput(textState, true), true);
 });
 
 test("billed server Compute takes precedence over stale client pricing", () => {

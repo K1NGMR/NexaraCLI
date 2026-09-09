@@ -1198,8 +1198,12 @@ function toolDiffBadge(name, args = {}) {
   return "";
 }
 
+export function usesStructuredOutput(state, streamJson = false) {
+  return streamJson || state?.outputFormat === "json" || state?.outputFormat === "stream-json";
+}
+
 function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}) {
-  if (streamJson || !call) return;
+  if (usesStructuredOutput(state, streamJson) || !call) return;
   if (state) {
     setComposerActivity(state, null);
     state.prepareTranscript?.(1);
@@ -1219,7 +1223,7 @@ function printToolCall(call, { cwd = "", streamJson = false, state = null } = {}
 
 function printToolResult(name, result, { args = {}, cwd = "", error = false, streamJson = false, state = null } = {}) {
   const text = String(result || "").trim();
-  if (streamJson) return;
+  if (usesStructuredOutput(state, streamJson)) return;
   // Non-error tool results are already represented by the tool-call line above;
   // printing them again duplicates lines on screen (e.g., ● Read / ● Read).
   if (!error) return;
@@ -1533,7 +1537,7 @@ async function runClientTool(state, call, signal) {
     const result = await executeCliTool(name, args, { cwd: state.cwd, allowOutside: outsidePaths.length > 0, signal });
     if (name === "TodoWrite") {
       state.todos = applyCliTodoUpdate(state.todos, args.todos, args.mode);
-      if (state.outputFormat !== "stream-json") printTodoList(state.todos, { state });
+      if (!usesStructuredOutput(state)) printTodoList(state.todos, { state });
       outputToolEvent(state, { type: "todo-update", todos: state.todos });
     }
     printToolResult(name, result, { args, cwd: state.cwd, streamJson: state.outputFormat === "stream-json", state });
