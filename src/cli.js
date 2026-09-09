@@ -1091,8 +1091,10 @@ function clearTerminalForSession() {
 }
 
 export function shorten(text, width) {
+  if (width <= 0) return "";
   if (visibleLength(text) <= width) return text;
   const plain = String(text).replace(ANSI_RE, "");
+  if (width === 1) return "…";
   return `${clipVisibleCells(plain, Math.max(1, width - 1))}…`;
 }
 

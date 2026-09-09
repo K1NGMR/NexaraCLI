@@ -52,6 +52,7 @@ test("terminal width helpers count cells without splitting graphemes", () => {
   assert.equal(shorten("😀😀", 3), "😀…");
   assert.equal(shorten("e\u0301x", 2), "e\u0301x");
   assert.equal(shorten("e\u0301xy", 2), "e\u0301…");
+  assert.equal(shorten("abc", 1), "…");
 });
 
 test("billed server Compute takes precedence over stale client pricing", () => {
