@@ -1,6 +1,50 @@
 import { EventEmitter } from "node:events";
 import { emitKeypressEvents } from "node:readline";
 
+const graphemeSegmenter = typeof Intl?.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+const combiningMarkPattern = /^\p{Mark}+$/u;
+const emojiPattern = /\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]/u;
+const wideCharacterPattern = /[\u{1100}-\u{115F}\u{2329}\u{232A}\u{2E80}-\u{A4CF}\u{AC00}-\u{D7A3}\u{F900}-\u{FAFF}\u{FE10}-\u{FE19}\u{FE30}-\u{FE6F}\u{FF00}-\u{FF60}\u{FFE0}-\u{FFE6}]/u;
+
+function graphemes(value) {
+  const text = String(value ?? "");
+  return graphemeSegmenter
+    ? Array.from(graphemeSegmenter.segment(text), ({ segment }) => segment)
+    : Array.from(text);
+}
+
+function cellWidth(value) {
+  const text = String(value ?? "");
+  if (!text || text === "\n" || combiningMarkPattern.test(text)) return 0;
+  if (emojiPattern.test(text) || wideCharacterPattern.test(text)) return 2;
+  return 1;
+}
+
+function textCellWidth(value) {
+  return graphemes(value).reduce((total, grapheme) => total + cellWidth(grapheme), 0);
+}
+
+function clipToCells(value, maxCells) {
+  const limit = Math.max(0, Number(maxCells) || 0);
+  let used = 0;
+  let result = "";
+  for (const grapheme of graphemes(value)) {
+    const width = cellWidth(grapheme);
+    if (used + width > limit) break;
+    result += grapheme;
+    used += width;
+  }
+  return result;
+}
+
+function replaceGraphemes(value, start, deleteCount, replacement = "") {
+  const items = graphemes(value);
+  items.splice(start, deleteCount, ...graphemes(replacement));
+  return items.join("");
+}
+
 // A small terminal editor for Windows Terminal/conhost. It deliberately owns
 // every byte in the input row; readline is excellent for pipes, but its line
 // wrapping and cursor bookkeeping are what caused the Chatbox to be clipped.
@@ -88,14 +132,17 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       inputMode = "active";
       render();
     },
-    getCursorPos() { return { cols: currentPrompt.length + cursor, rows: 0 }; },
+    getCursorPos() {
+      const layout = computeLayout(Math.max(24, Number(width()) || 80));
+      return { cols: textCellWidth(currentPrompt) + layout.cursorCol, rows: layout.visibleCursorRow };
+    },
     setPrompt(value) {
       // Strip styling from the prompt and retain the visible glyphs only.
       currentPrompt = String(value || "›  ").replace(/\u001b\[[0-9;]*m/g, "");
     },
     setLine(value) {
       line = String(value ?? "");
-      cursor = line.length;
+      cursor = graphemes(line).length;
       render();
     },
     setFixedRow(row) {
@@ -137,10 +184,10 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
         line = "";
         cursor = 0;
       } else if (value === "\b \b") {
-        if (cursor > 0) { line = `${line.slice(0, cursor - 1)}${line.slice(cursor)}`; cursor -= 1; }
+        if (cursor > 0) { line = replaceGraphemes(line, cursor - 1, 1); cursor -= 1; }
       } else if (typeof value === "string") {
-        line = `${line.slice(0, cursor)}${value}${line.slice(cursor)}`;
-        cursor += value.length;
+        line = replaceGraphemes(line, cursor, 0, value);
+        cursor += graphemes(value).length;
       }
       render();
     },
@@ -185,21 +232,51 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
   // parkCursor() so a caret park can never disagree with the last repaint
   // about which column the caret belongs in.
   function computeLayout(columns) {
-    const available = Math.max(1, columns - currentPrompt.length - 3);
+    const promptWidth = textCellWidth(currentPrompt);
+    const available = Math.max(1, columns - promptWidth - 3);
     const maxRows = Math.max(1, Number(rows()) || 3);
     const chunks = [];
     let cursorRow = 0;
     let cursorCol = 0;
     let offset = 0;
     for (const segment of line.split("\n")) {
-      if (!segment.length) chunks.push("");
-      else for (let index = 0; index < segment.length; index += available) chunks.push(segment.slice(index, index + available));
-      const segmentEnd = offset + segment.length;
-      if (cursor >= offset && cursor <= segmentEnd) {
-        const local = cursor - offset;
-        cursorRow = chunks.length - 1;
-        cursorCol = Math.min(available, local % available);
+      const items = graphemes(segment);
+      const segmentChunks = [];
+      if (!items.length) {
+        segmentChunks.push({ text: "", items: [] });
+      } else {
+        let chunkItems = [];
+        let chunkWidth = 0;
+        for (const item of items) {
+          const itemWidth = cellWidth(item);
+          if (chunkItems.length && chunkWidth + itemWidth > available) {
+            segmentChunks.push({ text: chunkItems.join(""), items: chunkItems });
+            chunkItems = [];
+            chunkWidth = 0;
+          }
+          chunkItems.push(item);
+          chunkWidth += itemWidth;
+        }
+        if (chunkItems.length) segmentChunks.push({ text: chunkItems.join(""), items: chunkItems });
       }
+      const segmentEnd = offset + items.length;
+      const localCursor = Math.max(0, Math.min(items.length, cursor - offset));
+      if (cursor >= offset && cursor <= segmentEnd) {
+        let consumed = 0;
+        for (let index = 0; index < segmentChunks.length; index += 1) {
+          const chunk = segmentChunks[index];
+          const next = consumed + chunk.items.length;
+          // At an exact wrap boundary the caret belongs at the end of the
+          // preceding row, not column zero on the next row.
+          if (localCursor <= next || index === segmentChunks.length - 1) {
+            cursorRow = chunks.length + index;
+            cursorCol = textCellWidth(chunk.items.slice(0, Math.max(0, localCursor - consumed)).join(""));
+            break;
+          }
+          consumed = next;
+        }
+      }
+      chunks.push(...segmentChunks.map(({ text }) => text));
       offset = segmentEnd + 1;
     }
     if (!chunks.length) chunks.push("");
@@ -228,7 +305,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     if (!row) return false;
     const columns = Math.max(24, Number(width()) || 80);
     const { cursorCol } = computeLayout(columns);
-    const targetCol = Math.max(1, Math.min(columns, currentPrompt.length + cursorCol + 1));
+    const targetCol = Math.max(1, Math.min(columns, textCellWidth(currentPrompt) + cursorCol + 1));
     output.write(`\u001b[${row};${targetCol}H`);
     return true;
   }
@@ -251,14 +328,15 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       // able to push a character past the last column: the terminal would
       // wrap it onto the next row and scroll the whole rail up by one, which
       // is precisely how the input line ended up overwriting the border.
-      const budget = Math.max(0, columns - currentPrompt.length - 1);
-      const visible = (visibleChunks[0] || "").slice(0, budget);
+      const promptWidth = textCellWidth(currentPrompt);
+      const budget = Math.max(0, columns - promptWidth - 1);
+      const visible = clipToCells(visibleChunks[0] || "", budget);
       const promptFormatted = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
       const textFormatted = `\u001b[38;2;250;249;245m${visible}\u001b[0m`;
       // Autowrap off for the duration of the paint: belt-and-braces against
       // that same one-row scroll.
       output.write(`\u001b[?7l\u001b[${row};1H\u001b[2K${promptFormatted}${textFormatted}\u001b[?7h`);
-      const targetCol = Math.max(1, Math.min(columns, currentPrompt.length + cursorCol + 1));
+      const targetCol = Math.max(1, Math.min(columns, promptWidth + cursorCol + 1));
       output.write(`\u001b[${row};${targetCol}H`);
       renderedRows = 1;
       return;
@@ -283,7 +361,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
     }
     const moveUp = rowsToClear - 1 - visibleCursorRow;
     if (moveUp) output.write(`\u001b[${moveUp}A`);
-    const cursorOffset = currentPrompt.length + cursorCol;
+    const cursorOffset = textCellWidth(currentPrompt) + cursorCol;
     if (cursorOffset) output.write(`\r\u001b[${cursorOffset}C`);
     renderedRows = visibleRows;
     events.emit("change", line);
@@ -356,22 +434,22 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       return;
     }
     if (name === "backspace") {
-      if (cursor > 0) { line = `${line.slice(0, cursor - 1)}${line.slice(cursor)}`; cursor -= 1; render(); }
+      if (cursor > 0) { line = replaceGraphemes(line, cursor - 1, 1); cursor -= 1; render(); }
       return;
     }
     if (name === "delete") {
-      if (cursor < line.length) { line = `${line.slice(0, cursor)}${line.slice(cursor + 1)}`; render(); }
+      if (cursor < graphemes(line).length) { line = replaceGraphemes(line, cursor, 1); render(); }
       return;
     }
     if (name === "left") { cursor = Math.max(0, cursor - 1); render(); return; }
-    if (name === "right") { cursor = Math.min(line.length, cursor + 1); render(); return; }
+    if (name === "right") { cursor = Math.min(graphemes(line).length, cursor + 1); render(); return; }
     if (name === "home" || (key.ctrl && name === "a")) { cursor = 0; render(); return; }
     if (name === "end" || (key.ctrl && name === "e")) { cursor = line.length; render(); return; }
     if (name === "up" || name === "down" || sequence === "\u001b[A" || sequence === "\u001b[B" || sequence === "\u001bOA" || sequence === "\u001bOB") return;
     if (key.ctrl && name === "u") { line = ""; cursor = 0; render(); return; }
     if (key.ctrl || key.meta || key.alt || !str || str.charCodeAt(0) < 32 || str.charCodeAt(0) === 127) return;
-    line = `${line.slice(0, cursor)}${str}${line.slice(cursor)}`;
-    cursor += str.length;
+    line = replaceGraphemes(line, cursor, 0, str);
+    cursor += graphemes(str).length;
     render();
   }
 

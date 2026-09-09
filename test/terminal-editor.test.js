@@ -198,3 +198,32 @@ test("a fixed row keeps every ordinary keystroke redraw on the input row", () =>
   // rows; with a fixed row there must be none of it.
   assert.equal(/\u001b\[\d*[AB]/.test(painted), false, "no relative row movement while pinned");
 });
+
+test("editing moves and deletes whole grapheme clusters", () => {
+  const { input, output } = fakeStreams();
+  const editor = createTerminalEditor({ input, output });
+  press(input, "😀");
+  press(input, "e\u0301");
+  press(input, "x");
+  press(input, "", { name: "left" });
+  press(input, "", { name: "backspace" });
+  assert.equal(editor.line, "😀x", "backspace must remove the combining grapheme as one unit");
+  press(input, "", { name: "home" });
+  press(input, "", { name: "delete" });
+  assert.equal(editor.line, "x", "delete must remove the emoji without leaving a surrogate");
+});
+
+test("wide graphemes use terminal cells when wrapping and parking the caret", () => {
+  const { input, output } = fakeStreams();
+  const writes = [];
+  output.columns = 12;
+  output.write = (value) => { writes.push(String(value)); return true; };
+  const editor = createTerminalEditor({ input, output, width: () => 12, rows: () => 2 });
+  editor.setFixedRow(() => 8);
+  for (const char of "😀😀😀😀") press(input, char);
+  writes.length = 0;
+  editor.parkCursor();
+  const [, column] = /\u001b\[8;(\d+)H/.exec(writes.join("")) || [];
+  assert.equal(editor.line, "😀😀😀😀");
+  assert.ok(Number(column) <= 12, `caret column ${column} must stay within terminal width`);
+});
