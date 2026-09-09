@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { consumeDataLine } from "../src/api.js";
+import { consumeDataLine, MAX_TOOL_INPUT_CHARS } from "../src/api.js";
 import { shorten, toolAccessDecision, usageCompute, usesStructuredOutput, visibleLength } from "../src/cli.js";
 
 function stateFor(permissionMode) {
@@ -100,4 +100,17 @@ test("a repeated tool-call event for the same toolCallId is not double-added", (
   consumeDataLine(line, state, null, () => {}, () => {}, () => {}, () => {}, () => {}, () => {});
   consumeDataLine(line, state, null, () => {}, () => {}, () => {}, () => {}, () => {}, () => {});
   assert.equal(state.nativeCalls.length, 1);
+});
+
+test("streamed tool input fragments stay bounded", () => {
+  const state = freshApiState();
+  consumeDataLine(
+    JSON.stringify({ type: "tool-input-start", toolCallId: "bounded" }),
+    state, null, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
+  );
+  consumeDataLine(
+    JSON.stringify({ type: "tool-input-delta", toolCallId: "bounded", delta: "x".repeat(MAX_TOOL_INPUT_CHARS + 1024) }),
+    state, null, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
+  );
+  assert.equal(state.toolInputs.get("bounded").length, MAX_TOOL_INPUT_CHARS);
 });

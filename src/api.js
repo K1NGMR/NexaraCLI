@@ -8,6 +8,7 @@ function id() {
 
 // See consumeDataLine's text/reasoning accumulation below.
 export const MAX_ACCUMULATED_TEXT_BYTES = 4_000_000;
+export const MAX_TOOL_INPUT_CHARS = 256_000;
 
 function textOf(message) {
   return (message.parts || [])
@@ -217,7 +218,11 @@ export function consumeDataLine(raw, state, onStatus, onText, onToolCall, onTool
   } else if (type === "tool-input-delta") {
     state.toolInputs ??= new Map();
     const toolCallId = event.toolCallId || "default";
-    state.toolInputs.set(toolCallId, `${state.toolInputs.get(toolCallId) || ""}${event.delta || event.inputText || ""}`);
+    const current = String(state.toolInputs.get(toolCallId) || "");
+    const delta = String(event.delta || event.inputText || "");
+    if (current.length < MAX_TOOL_INPUT_CHARS) {
+      state.toolInputs.set(toolCallId, `${current}${delta.slice(0, MAX_TOOL_INPUT_CHARS - current.length)}`);
+    }
     onStatus?.(`tool:${event.toolName || "tool"}`);
   } else if (type === "tool-input-available" || type === "tool-call") {
     // `toolName` is the current UI-message wire name. Older gateways and
