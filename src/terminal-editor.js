@@ -331,7 +331,7 @@ export function createTerminalEditor({ input, output, width = () => 80, rows = (
       const promptWidth = textCellWidth(currentPrompt);
       const budget = Math.max(0, columns - promptWidth - 1);
       const visible = clipToCells(visibleChunks[0] || "", budget);
-      const promptFormatted = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
+      const promptFormatted = "\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m";
       const textFormatted = `\u001b[38;2;250;249;245m${visible}\u001b[0m`;
       // Autowrap off for the duration of the paint: belt-and-braces against
       // that same one-row scroll.

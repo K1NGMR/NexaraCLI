@@ -508,9 +508,11 @@ const color = {
   green: rgb(93, 184, 114),
   yellow: rgb(212, 160, 23),
   // Compatibility aliases retained while commands transition to the palette.
-  cyan: rgb(88, 166, 255),
+  // Keep legacy call sites on the warm brand system instead of reintroducing
+  // a cool blue accent in the terminal UI.
+  cyan: rgb(204, 120, 92),
   white: rgb(250, 249, 245),
-  blue: rgb(88, 166, 255),
+  blue: rgb(204, 120, 92),
   magenta: rgb(204, 120, 92),
   // Kept as aliases for older rendering paths, but deliberately mapped to
   // Nexara's warm coral/cream system instead of the old neon green terminal
@@ -4237,7 +4239,7 @@ async function interactive(config, auth, configPath, existingState) {
     railTop = top;
     const width = Math.max(20, Number(output.columns) || 80);
     const border = color.blue("─".repeat(width));
-    const promptStr = "\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m";
+    const promptStr = "\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m";
     const text = typeof rl?.line === "string" ? rl.line : "";
     output.write(`\u001b[${top};1H\u001b[2K${border}`);
     output.write(`\u001b[${inputRow};1H\u001b[2K${promptStr}\u001b[38;2;250;249;245m${text.slice(0, Math.max(0, width - 4))}\u001b[0m`);
@@ -4259,14 +4261,14 @@ async function interactive(config, auth, configPath, existingState) {
       // on the very next repaint instead of keeping a row that has moved.
       rl.setFixedRow?.(() => (railTop == null ? inputRow : railTop + 1));
       rl.resetRenderAnchor?.();
-      rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
+      rl.setPrompt("\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m");
       composerMounted = true;
       if (!rl.repaint?.()) output.write(`\u001b[${inputRow};4H`);
       return;
     }
     renderComposerFooter();
     output.write("\r\u001b[2K\u001b[0m\r");
-    rl.setPrompt("\u001b[38;2;88;166;255m›\u001b[38;2;250;249;245m  \u001b[0m");
+    rl.setPrompt("\u001b[38;2;204;120;92m›\u001b[38;2;250;249;245m  \u001b[0m");
     rl.prompt();
   }
 
